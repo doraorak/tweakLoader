@@ -14,8 +14,27 @@
 #include <dlfcn.h>
 #include <libproc.h>
 #include <objc/runtime.h>
-// #include <os/log.h>
+/// Logging is OFF by default and should normally stay that way.
+///
+/// This code runs inside EVERY process that launches, logd included. os_log() from
+/// a constructor in logd deadlocks logd, and once logging is wedged the rest of the
+/// system follows — a machine in that state usually needs a reboot to recover.
+/// Enable only while debugging something you cannot reach otherwise, and only when
+/// you can afford to lose the box.
+#define ENABLE_LOGS 0
+
+#if ENABLE_LOGS
+#include <os/log.h>
+#define TL_LOG(fmt, ...) os_log(OS_LOG_DEFAULT, fmt, ##__VA_ARGS__)
+#else
+#define TL_LOG(fmt, ...) do {} while (0)
+#endif
+
+#if !ENABLE_LOGS
+// Existing call sites use os_log() directly; neutralise it rather than rewrite them.
+// The arguments are discarded unevaluated, so OS_LOG_DEFAULT need not exist.
 #define os_log(log, format, ...) do {} while (0)
+#endif
 #include <sys/sysctl.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -151,8 +170,21 @@ static CFDictionaryRef find_process_rule_entry(CFDictionaryRef dict, const char*
 }
 
 /// Checks if injection is prohibited for this process globally.
-static int injection_denied(const char* procName, const char* execPath, CFStringRef mainBundleId) {
-    // 1. Check static denyInjectionList.plist
+/// Two separate mechanisms answer "should this process be injected at all", and
+/// they are deliberately not merged:
+///
+///   denyInjectionList.plist  ships with the loader and is a SAFETY list. logd is
+///                            on it because logging from a constructor there wedges
+///                            the machine. It is not a user preference and nothing
+///                            in a UI should be able to clear it.
+///   perProcessTweaks.plist   is USER state, written by whatever front-end manages
+///                            tweaks, and says "I do not want injection in this
+///                            process right now".
+///
+/// Same effect, different owner and lifetime — collapsing them would mean a user
+/// action could remove a protection that exists to keep the system bootable.
+static int is_injection_denied_for_process(const char* procName, const char* execPath, CFStringRef mainBundleId) {
+    // 1. Safety list, shipped with the loader.
     CFPropertyListRef denyPlist = read_plist_file(denyListPath);
     if (denyPlist) {
         int denied = 0;
@@ -173,7 +205,7 @@ static int injection_denied(const char* procName, const char* execPath, CFString
         }
     }
 
-    // 2. Check perProcessTweaks.plist for process-level disable
+    // 2. User preference, per process.
     CFPropertyListRef perProcPlist = read_plist_file(perProcessTweaksPath);
     if (perProcPlist) {
         if (CFGetTypeID(perProcPlist) == CFDictionaryGetTypeID()) {
@@ -237,7 +269,7 @@ int safe_boot(void) {
 // MARK: - Filter Plist Evaluation
 
 /// Evaluates a tweak's Filter dictionary against the current process.
-static bool check_filter_dictionary(
+static bool is_injection_allowed_for_process_by_filter(
     CFDictionaryRef filters,
     const char* procName,
     const char* execPath,
@@ -285,15 +317,14 @@ static bool check_filter_dictionary(
 
     // 3. Privilege Gate ("Any" | "Root" | "User" - hard veto on mismatch)
     //
-    // Extension, not part of the iOS filter schema: absent or "Any" is a no-op,
-    // so every existing filter keeps its current behaviour.
+    // One of this loader's extensions to the iOS filter schema, alongside
+    // ExcludeBundles and Type. Absent or "Any" is a no-op, so a filter written for
+    // the original schema keeps its behaviour exactly.
     //
-    // This is a containment control. A tweak that cannot load into a root process
-    // cannot gain root, and therefore cannot task_for_pid the TweakInject app to
-    // reach the GitHub token -- the escalation path that blacklisting the app
-    // alone does NOT close. euid is read here, at load time; a process that drops
-    // privileges later is not re-evaluated, which matches how the rest of these
-    // gates work.
+    // It is a containment control: a tweak that cannot load into a root process
+    // cannot gain root, which bounds what a package can reach if it turns out to be
+    // hostile or simply broken. euid is read here, at load time; a process that
+    // drops privileges afterwards is not re-evaluated, matching the other gates.
     CFStringRef privFilter = (CFStringRef)CFDictionaryGetValue(filters, CFSTR("Privilege"));
     if (privFilter && CFGetTypeID(privFilter) == CFStringGetTypeID()) {
         uid_t euid = geteuid();
@@ -450,7 +481,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
     }
 
     // 3. Denylist check
-    if (injection_denied(procName, execPath, mainBundleId)) {
+    if (is_injection_denied_for_process(procName, execPath, mainBundleId)) {
         os_log(OS_LOG_DEFAULT, "[TweakLoader] %{public}s is denied, skipping injection", procName);
         return;
     }
@@ -532,7 +563,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
                 filterDict = rootDict;
             }
 
-            if (check_filter_dictionary(filterDict, procName, execPath, mainBundle, bundlePath, mainBundleId)) {
+            if (is_injection_allowed_for_process_by_filter(filterDict, procName, execPath, mainBundle, bundlePath, mainBundleId)) {
                 os_log(OS_LOG_DEFAULT, "[TweakLoader] Injecting %{public}s into %{public}s (pid %d)", dylibFullPath, procName, getpid());
                 void* handle = dlopen(dylibFullPath, RTLD_NOW);
                 if (handle) {

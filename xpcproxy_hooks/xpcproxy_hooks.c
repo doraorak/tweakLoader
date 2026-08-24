@@ -2,6 +2,22 @@
 #include <dyld-interposing.h>
 #include <spawn.h>
 #include "common.h"
+
+/// Logging is OFF by default and should normally stay that way.
+///
+/// This code runs inside EVERY process that launches, logd included. os_log() from
+/// a constructor in logd deadlocks logd, and once logging is wedged the rest of the
+/// system follows — a machine in that state usually needs a reboot to recover.
+/// Enable only while debugging something you cannot reach otherwise, and only when
+/// you can afford to lose the box.
+#define ENABLE_LOGS 0
+
+#if ENABLE_LOGS
+#include <os/log.h>
+#define TL_LOG(fmt, ...) os_log(OS_LOG_DEFAULT, fmt, ##__VA_ARGS__)
+#else
+#define TL_LOG(fmt, ...) do {} while (0)
+#endif
 #include <dlfcn.h>
 #include <string.h>
 #include <stdlib.h>
@@ -27,10 +43,12 @@ static const char *process_blacklist[] = {
     "AccessibilityUIServer",
     "UserSelector",
     "ScreenTimeAgent",
-    // The trusted path: TweakInject holds the GitHub token in memory and can
-    // reach root, and the helper IS root. Do not even map the loader into them.
-    // denyInjectionList.plist already stops tweaks loading there, but that check
-    // runs INSIDE the loader, i.e. after our code is already in the process.
+    // The managing front-end and its privileged helper. Whatever installs and
+    // controls tweaks is the trusted path, and a tweak loaded into it could
+    // subvert the very thing meant to govern tweaks. denyInjectionList.plist
+    // already stops tweaks loading there, but that check runs INSIDE the loader,
+    // i.e. after our code is in the process — excluding them here means the loader
+    // is never mapped in at all.
     "TweakInject",
     "com.doraorak.tweakinject.helper",
 };

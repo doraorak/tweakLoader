@@ -28,7 +28,6 @@ static const char *protected_processes[] = {
     "loginwindow",
 };
 
-#define WINDOWSERVER_PROCESS "WindowServer"
 
 /* Processes we intend to kill, pinned by start time so a recycled pid is never
    mistaken for the original on a retry pass. */
@@ -128,7 +127,7 @@ int main(int argc, char *argv[]) {
             continue;
 
         if (is_protected(procs[i].kp_proc.p_comm)) {
-            if (strcmp(procs[i].kp_proc.p_comm, WINDOWSERVER_PROCESS) == 0) {
+            if (strcmp(procs[i].kp_proc.p_comm, "WindowServer") == 0) {
                 windowserver.pid = pid;
                 windowserver.start = procs[i].kp_proc.p_starttime;
             }

@@ -46,6 +46,27 @@ with OR — plus a few additions:
 </dict>
 ```
 
+## Getting it running
+
+Three steps, because a loader that only affects processes started *after* it is
+installed is not much use:
+
+1. **Inject the launchd hook.** [Dylinject](https://github.com/doraorak/Dylinject)
+   loads `launchd_hooks.dylib` into launchd (pid 1). From then on every process
+   launchd spawns inherits `libtweakLoader.dylib`.
+2. **Catch what was already running.** Everything alive before step 1 has no loader
+   in it. `ldrestart` restarts userspace so those processes come back with it,
+   without killing the session.
+3. **Reboot survival.** The hook has to be re-injected after each boot.
+
+TweakInject, the macOS app built on this, drives all of it from a GUI — install,
+inject, ldrestart, per-process rules and tweak management — so none of the above
+needs doing by hand. Its package repository is
+[TweakInject-Store](https://github.com/doraorak/TweakInject-Store).
+
+This repository is the engine underneath: the app depends on the loader, the loader
+does not depend on the app, and nothing here assumes a particular front-end.
+
 ## Layout on disk
 
 ```
@@ -71,6 +92,19 @@ has it blank), or build a component directly:
 clang -dynamiclib -arch arm64e -install_name /usr/local/lib/libtweakLoader.dylib \
   -framework CoreFoundation -lobjc -o libtweakLoader.dylib tweakLoader/tweakLoader.c
 ```
+
+## Logging
+
+Every component that gets injected has `ENABLE_LOGS`, **off by default**:
+
+```c
+#define ENABLE_LOGS 0
+```
+
+Leave it off unless you are actively debugging. This code runs inside every process
+that launches, `logd` included, and `os_log()` from a constructor there deadlocks
+logd — after which the rest of the system follows and the machine usually needs a
+reboot to recover.
 
 ## Notes
 

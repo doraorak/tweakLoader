@@ -11,6 +11,7 @@
 #import <libproc.h>
 #import <pthread/pthread.h>
 #import <execinfo.h>
+#import <string.h>
 #import <dlfcn.h>
 
 #define safePath "/Library/TweakInject/SafeMode/safemode.txt"
@@ -21,17 +22,25 @@
 void handle_signal(int signo, siginfo_t *info, void *context) {
     (void)context; // Unused parameter
     
-    PRINT("[safeMode] pid: %d. Signal received: %d\n", getpid(), signo);
-    
-    char name[256];
-    proc_name(info->si_pid, name, 256);
-    if (strstr(name, "ldrestart")){
+    // Name of the process that is crashing (us), not the one that signalled us.
+    char selfName[256] = {0};
+    if (proc_name(getpid(), selfName, sizeof(selfName)) <= 0) {
+        strncpy(selfName, "unknown", sizeof(selfName) - 1);
+    }
+
+    PRINT("[safeMode] %{public}s (pid %d) received signal %d\n", selfName, getpid(), signo);
+
+    // si_pid is the SENDER. ldrestart terminates processes deliberately, so its
+    // signals are not crashes and must not trip safe mode.
+    char senderName[256] = {0};
+    proc_name(info->si_pid, senderName, sizeof(senderName));
+    if (strstr(senderName, "ldrestart")){
         return;
     }
     
     FILE *fp = fopen(safePath, "a");
     if (fp) {
-        fprintf(fp, "[safeMode] pid: %d. Signal received: %d\n", getpid(), signo);
+        fprintf(fp, "[safeMode] %s (pid %d) received signal %d\n", selfName, getpid(), signo);
         fclose(fp);
     }
     
