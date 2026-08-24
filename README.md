@@ -95,7 +95,14 @@ clang -dynamiclib -arch arm64e -install_name /usr/local/lib/libtweakLoader.dylib
 
 ## Logging
 
-Every component that gets injected has `ENABLE_LOGS`, **off by default**:
+Every injected component has `ENABLE_LOGS`, **off by default**, and logs through
+one macro:
+
+```c
+TL_LOG("[TweakLoader] %{public}s denied", procName);
+```
+
+The switch itself:
 
 ```c
 #define ENABLE_LOGS 0

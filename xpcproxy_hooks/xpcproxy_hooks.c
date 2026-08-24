@@ -1,7 +1,6 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <dyld-interposing.h>
 #include <spawn.h>
-#include "common.h"
 
 /// Logging is OFF by default and should normally stay that way.
 ///

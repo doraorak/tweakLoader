@@ -25,16 +25,11 @@
 
 #if ENABLE_LOGS
 #include <os/log.h>
-#define TL_LOG(fmt, ...) os_log(OS_LOG_DEFAULT, fmt, ##__VA_ARGS__)
+#define TL_LOG(fmt, ...) TL_LOG(fmt, ##__VA_ARGS__)
 #else
 #define TL_LOG(fmt, ...) do {} while (0)
 #endif
 
-#if !ENABLE_LOGS
-// Existing call sites use os_log() directly; neutralise it rather than rewrite them.
-// The arguments are discarded unevaluated, so OS_LOG_DEFAULT need not exist.
-#define os_log(log, format, ...) do {} while (0)
-#endif
 #include <sys/sysctl.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -450,7 +445,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
             if (sandbox_token) {
                 int64_t handle = _sandbox_extension_consume(sandbox_token);
                 if (handle > 0) {
-                    os_log(OS_LOG_DEFAULT, "[TweakLoader] Sandbox extension consumed successfully");
+                    TL_LOG("[TweakLoader] Sandbox extension consumed successfully");
                 }
             }
         }
@@ -482,7 +477,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
 
     // 3. Denylist check
     if (is_injection_denied_for_process(procName, execPath, mainBundleId)) {
-        os_log(OS_LOG_DEFAULT, "[TweakLoader] %{public}s is denied, skipping injection", procName);
+        TL_LOG("[TweakLoader] %{public}s is denied, skipping injection", procName);
         return;
     }
 
@@ -494,7 +489,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
     }
 
     if (safe_boot()) {
-        os_log(OS_LOG_DEFAULT, "[TweakLoader] SafeBoot enabled, skipping injection");
+        TL_LOG("[TweakLoader] SafeBoot enabled, skipping injection");
         return;
     }
 
@@ -505,7 +500,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
             size_t nlen = strlen(smEntry->d_name);
             if (nlen > 4 && strcmp(smEntry->d_name + nlen - 4, ".txt") == 0) {
                 closedir(smDir);
-                os_log(OS_LOG_DEFAULT, "[TweakLoader] SafeMode active, skipping injection");
+                TL_LOG("[TweakLoader] SafeMode active, skipping injection");
                 return;
             }
         }
@@ -516,7 +511,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
     struct dirent** namelist = NULL;
     int count = scandir(twkPath, &namelist, filter_plist_files, alphasort);
     if (count < 0) {
-        os_log(OS_LOG_DEFAULT, "[TweakLoader] Failed to scan %s", twkPath);
+        TL_LOG("[TweakLoader] Failed to scan %s", twkPath);
         return;
     }
 
@@ -564,13 +559,13 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
             }
 
             if (is_injection_allowed_for_process_by_filter(filterDict, procName, execPath, mainBundle, bundlePath, mainBundleId)) {
-                os_log(OS_LOG_DEFAULT, "[TweakLoader] Injecting %{public}s into %{public}s (pid %d)", dylibFullPath, procName, getpid());
+                TL_LOG("[TweakLoader] Injecting %{public}s into %{public}s (pid %d)", dylibFullPath, procName, getpid());
                 void* handle = dlopen(dylibFullPath, RTLD_NOW);
                 if (handle) {
-                    os_log(OS_LOG_DEFAULT, "[TweakLoader] Injected %{public}s successfully", dylibFullPath);
+                    TL_LOG("[TweakLoader] Injected %{public}s successfully", dylibFullPath);
                 } else {
                     const char* dlErr = dlerror();
-                    os_log(OS_LOG_DEFAULT, "[TweakLoader] dlopen failed for %{public}s: %{public}s", dylibFullPath, dlErr ? dlErr : "unknown");
+                    TL_LOG("[TweakLoader] dlopen failed for %{public}s: %{public}s", dylibFullPath, dlErr ? dlErr : "unknown");
                 }
             }
         }
