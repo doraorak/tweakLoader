@@ -29,7 +29,9 @@ follows the iOS/Substrate convention — `Bundles`, `Classes`, `Executables`, co
 with OR — plus a few additions:
 
 - `ExcludeBundles` — hard veto, evaluated before anything else.
-- `Type` — `App`, `Binary` or `All`.
+- `Type` — `App`, `Binary` or `Any`. Not optional in practice: a filter with no
+  `Bundles`/`Classes`/`Executables` matches nothing unless `Type` is present, so
+  `Any` is what makes a criteria-less filter apply everywhere.
 - `Privilege` — `Any` (default), `Root`, or `User`. `User` keeps a tweak out of root
   processes entirely, which bounds what a package can reach. Absent means `Any`, so
   existing filters behave exactly as before.
