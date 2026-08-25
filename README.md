@@ -1,10 +1,11 @@
 # tweakLoader
 
-The injection core behind TweakInject: a tweak loader for macOS on Apple Silicon.
+Tweak injection for macOS on Apple Silicon: it loads dylibs into other processes,
+and each tweak declares which processes it belongs in.
 
-It gets a dylib into every process that launches, decides per-process which tweaks
-apply, and provides the pieces needed to make that happen at boot and to recover
-when it goes wrong.
+That declaration is a filter plist shipped next to the dylib — matching on bundle
+identifier, executable, Objective-C class, process type or privilege level — which
+the loader evaluates inside every process as it starts.
 
 > **Requires SIP to be disabled** (`csrutil disable` from recoveryOS). Nothing here
 > works on a stock system, and that is by design — turning SIP off removes real
@@ -60,9 +61,9 @@ installed is not much use:
    without killing the session.
 3. **Reboot survival.** The hook has to be re-injected after each boot.
 
-TweakInject, the macOS app built on this, drives all of it from a GUI — install,
-inject, ldrestart, per-process rules and tweak management — so none of the above
-needs doing by hand. Its package repository is
+TweakInject (to be released) is the macOS app built on this: it drives all of the
+above from a GUI — install, inject, ldrestart, per-process rules and tweak
+management — so none of it needs doing by hand. Its package repository is
 [TweakInject-Store](https://github.com/doraorak/TweakInject-Store).
 
 This repository is the engine underneath: the app depends on the loader, the loader
