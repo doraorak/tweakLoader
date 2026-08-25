@@ -25,12 +25,17 @@ follows the iOS tweak-filter convention — `Bundles`, `Classes`, `Executables`,
 with OR — plus a few additions:
 
 - `ExcludeBundles` — hard veto, evaluated before anything else.
-- `Type` — `App`, `Binary` or `Any`. Not optional in practice: a filter with no
-  `Bundles`/`Classes`/`Executables` matches nothing unless `Type` is present, so
-  `Any` is what makes a criteria-less filter apply everywhere.
+- `Type` — `App`, `Binary` or `Any`.
 - `Privilege` — `Any` (default), `Root`, or `User`. `User` keeps a tweak out of root
   processes entirely, which bounds what a package can reach. Absent means `Any`, so
   existing filters behave exactly as before.
+
+A filter that declares no `Bundles`/`Classes`/`Executables` applies to every process
+that passes its gates, as long as it sets at least one of `Type` or `Privilege`. A
+filter that sets neither matches nothing — no criteria and no gate is an incomplete
+filter, not a request to load everywhere. The iOS loaders differ here: there a
+criteria-less filter matches nothing at all, and "everywhere" is spelled by naming a
+universally linked bundle such as `com.apple.foundation`.
 
 ```xml
 <dict>

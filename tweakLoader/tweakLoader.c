@@ -410,12 +410,19 @@ static bool is_injection_allowed_for_process_by_filter(
         }
     }
 
-    // If Type was specified and passed, and no criteria arrays were specified, inject.
+    // A filter with no criteria arrays matches every process that got past the gates
+    // above -- but only if it actually declared a gate. This is a deliberate
+    // divergence from the iOS loaders, where a criteria-less filter matches nothing
+    // and "everywhere" is spelled by naming a universally linked bundle such as
+    // com.apple.foundation. Here Type/Privilege say it directly.
+    //
+    // An empty filter still matches nothing: declaring no criteria AND no gate is
+    // not a request to inject everywhere, it is an incomplete filter.
     bool has_any_criteria = (bundlesFilter && CFGetTypeID(bundlesFilter) == CFArrayGetTypeID() && CFArrayGetCount(bundlesFilter) > 0) ||
                             (classesFilter && CFGetTypeID(classesFilter) == CFArrayGetTypeID() && CFArrayGetCount(classesFilter) > 0) ||
                             (executablesFilter && CFGetTypeID(executablesFilter) == CFArrayGetTypeID() && CFArrayGetCount(executablesFilter) > 0);
 
-    if (!has_any_criteria && typeFilter != NULL) {
+    if (!has_any_criteria && (typeFilter != NULL || privFilter != NULL)) {
         return true;
     }
 
