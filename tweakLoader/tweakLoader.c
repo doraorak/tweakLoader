@@ -356,7 +356,7 @@ static bool is_injection_allowed_for_process_by_filter(
         }
     }
 
-    // 4. Criteria Matching: Bundles, Classes, Executables (ElleKit / CydiaSubstrate OR semantics)
+    // 4. Criteria Matching: Bundles, Classes, Executables (OR semantics)
     CFArrayRef bundlesFilter = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("Bundles"));
     if (bundlesFilter && CFGetTypeID(bundlesFilter) == CFArrayGetTypeID()) {
         CFIndex count = CFArrayGetCount(bundlesFilter);
