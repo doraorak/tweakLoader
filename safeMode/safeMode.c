@@ -32,7 +32,7 @@
 #endif
 
 
-void handle_signal(int signo, siginfo_t *info, void *context) {
+void handle_crash_signal(int signo, siginfo_t *info, void *context) {
     (void)context; // Unused parameter
     
     // Name of the process that is crashing (us), not the one that signalled us.
@@ -64,9 +64,9 @@ void handle_signal(int signo, siginfo_t *info, void *context) {
 }
 
 __attribute__((constructor))
-static void entry(void) {
+static void init_safe_mode(void) {
     struct sigaction sa;
-        sa.sa_sigaction = handle_signal;
+        sa.sa_sigaction = handle_crash_signal;
         sa.sa_flags = SA_SIGINFO | SA_RESETHAND; // Get signal info and reset handler after first use
         sigemptyset(&sa.sa_mask);
 

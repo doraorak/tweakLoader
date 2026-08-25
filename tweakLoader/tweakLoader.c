@@ -242,7 +242,7 @@ static int is_tweak_disabled_for_process(const char* tweakBaseName, const char* 
 // MARK: - Safe Boot Detection
 
 /// Checks if macOS booted into Safe Mode via kern.bootargs.
-int safe_boot(void) {
+int is_booted_in_safe_mode(void) {
     size_t size = 0;
     if (sysctlbyname("kern.bootargs", NULL, &size, NULL, 0) != 0 || size == 0)
         return 0;
@@ -488,7 +488,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
         dlopen(safeModeDylibPath, RTLD_NOW);
     }
 
-    if (safe_boot()) {
+    if (is_booted_in_safe_mode()) {
         TL_LOG("[TweakLoader] SafeBoot enabled, skipping injection");
         return;
     }

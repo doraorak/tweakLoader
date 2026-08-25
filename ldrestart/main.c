@@ -36,7 +36,7 @@ struct target {
     struct timeval start;
 };
 
-static int is_protected(const char *name) {
+static int is_protected_process_name(const char *name) {
     for (size_t i = 0; i < sizeof(protected_processes) / sizeof(*protected_processes); i++) {
         if (strcmp(name, protected_processes[i]) == 0)
             return 1;
@@ -44,7 +44,7 @@ static int is_protected(const char *name) {
     return 0;
 }
 
-static struct kinfo_proc *snapshot(size_t *out_count) {
+static struct kinfo_proc *copy_running_processes(size_t *out_count) {
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
 
     size_t size = 0;
@@ -73,7 +73,7 @@ static struct kinfo_proc *snapshot(size_t *out_count) {
     return procs;
 }
 
-static int same_process(const struct kinfo_proc *proc, const struct target *target) {
+static int is_same_process_instance(const struct kinfo_proc *proc, const struct target *target) {
     return proc->kp_proc.p_pid == target->pid &&
            proc->kp_proc.p_starttime.tv_sec == target->start.tv_sec &&
            proc->kp_proc.p_starttime.tv_usec == target->start.tv_usec;
@@ -104,7 +104,7 @@ int main(int argc, char *argv[]) {
     setsid();
 
     size_t proc_count = 0;
-    struct kinfo_proc *procs = snapshot(&proc_count);
+    struct kinfo_proc *procs = copy_running_processes(&proc_count);
     if (!procs)
         exit(1);
 
@@ -126,7 +126,7 @@ int main(int argc, char *argv[]) {
         if (pid == 0 || pid == 1 || pid == self)
             continue;
 
-        if (is_protected(procs[i].kp_proc.p_comm)) {
+        if (is_protected_process_name(procs[i].kp_proc.p_comm)) {
             if (strcmp(procs[i].kp_proc.p_comm, "WindowServer") == 0) {
                 windowserver.pid = pid;
                 windowserver.start = procs[i].kp_proc.p_starttime;
@@ -152,14 +152,14 @@ int main(int argc, char *argv[]) {
         usleep(200 * 1000);
 
         size_t live_count = 0;
-        struct kinfo_proc *live = snapshot(&live_count);
+        struct kinfo_proc *live = copy_running_processes(&live_count);
         if (!live)
             break;
 
         size_t survivors = 0;
         for (size_t i = 0; i < live_count; i++) {
             for (size_t j = 0; j < target_count; j++) {
-                if (!same_process(&live[i], &targets[j]))
+                if (!is_same_process_instance(&live[i], &targets[j]))
                     continue;
 
                 if (kill(targets[j].pid, SIGKILL) != 0 && errno != ESRCH)

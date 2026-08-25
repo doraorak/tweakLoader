@@ -52,7 +52,7 @@ static const char *process_blacklist[] = {
     "com.doraorak.tweakinject.helper",
 };
 
-static int is_blacklisted(const char *path) {
+static int is_path_blacklisted_from_injection(const char *path) {
     if (path == NULL) {
         return 0;
     }
@@ -79,7 +79,7 @@ static int posix_spawn_xpcproxy(pid_t * __restrict pid, const char * __restrict 
     char *allocated_sandbox_token = NULL;
     char **allocated_envp = NULL;
 
-    int should_hook = !is_blacklisted(path) && __envp != NULL;
+    int should_hook = !is_path_blacklisted_from_injection(path) && __envp != NULL;
 
     if (should_hook) {
         size_t envp_size = 0;
