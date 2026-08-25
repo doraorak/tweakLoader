@@ -1,7 +1,6 @@
 # tweakLoader
 
-The injection core behind TweakInject: a Substrate-style tweak loader for macOS on
-Apple Silicon.
+The injection core behind TweakInject: a tweak loader for macOS on Apple Silicon.
 
 It gets a dylib into every process that launches, decides per-process which tweaks
 apply, and provides the pieces needed to make that happen at boot and to recover
@@ -25,7 +24,7 @@ when it goes wrong.
 ## Filters
 
 A tweak ships a plist next to its dylib describing where it should load. The format
-follows the iOS/Substrate convention — `Bundles`, `Classes`, `Executables`, combined
+follows the iOS tweak-filter convention — `Bundles`, `Classes`, `Executables`, combined
 with OR — plus a few additions:
 
 - `ExcludeBundles` — hard veto, evaluated before anything else.
