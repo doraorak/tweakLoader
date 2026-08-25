@@ -1,11 +1,7 @@
 # tweakLoader
 
-Tweak injection for macOS on Apple Silicon: it loads dylibs into other processes,
-and each tweak declares which processes it belongs in.
-
-That declaration is a filter plist shipped next to the dylib — matching on bundle
-identifier, executable, Objective-C class, process type or privilege level — which
-the loader evaluates inside every process as it starts.
+A tweak loader and injection suite for macOS on Apple silicon, built to work like
+its iOS counterparts while extending what a tweak can filter on.
 
 > **Requires SIP to be disabled** (`csrutil disable` from recoveryOS). Nothing here
 > works on a stock system, and that is by design — turning SIP off removes real
