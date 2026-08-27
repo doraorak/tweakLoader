@@ -2,21 +2,57 @@
 #include <spawn.h>
 #include <dyld-interposing.h>
 
-/// Logging is OFF by default and should normally stay that way.
-///
-/// This code runs inside EVERY process that launches, logd included. os_log() from
-/// a constructor in logd deadlocks logd, and once logging is wedged the rest of the
-/// system follows — a machine in that state usually needs a reboot to recover.
-/// Enable only while debugging something you cannot reach otherwise, and only when
-/// you can afford to lose the box.
-#define ENABLE_LOGS 0
+#include <sys/time.h>
+#include <time.h>
+#include <stdarg.h>
+#include <sys/stat.h>
 
-#if ENABLE_LOGS
-#include <os/log.h>
-#define TL_LOG(fmt, ...) os_log(OS_LOG_DEFAULT, fmt, ##__VA_ARGS__)
-#else
-#define TL_LOG(fmt, ...) do {} while (0)
-#endif
+#define TWEAKINJECT_LOG_PATH     "/Library/TweakInject/tweakinject.log"
+#define TWEAKINJECT_LOG_FALLBACK "/tmp/tweakinject.log"
+
+/// Safe, deadlock-free file logging that avoids os_log / logd IPC deadlocks.
+static void tl_safe_log(const char* fmt, ...) {
+    const char* prog = getprogname();
+    if (prog && (strcmp(prog, "logd") == 0 || strcmp(prog, "diagnosticd") == 0)) {
+        return;
+    }
+
+    char body[1024];
+    va_list args;
+    va_start(args, fmt);
+    int bodyLen = vsnprintf(body, sizeof(body) - 2, fmt, args);
+    va_end(args);
+
+    if (bodyLen <= 0) return;
+
+    if (body[bodyLen - 1] != '\n') {
+        body[bodyLen] = '\n';
+        body[bodyLen + 1] = '\0';
+        bodyLen++;
+    }
+
+    time_t now = time(NULL);
+    struct tm tm_buf;
+    localtime_r(&now, &tm_buf);
+    char timeStr[32];
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &tm_buf);
+
+    char line[1280];
+    int lineLen = snprintf(line, sizeof(line), "[%s] [%s:%d] %s", timeStr, prog ? prog : "unknown", getpid(), body);
+    if (lineLen <= 0) return;
+
+    int fd = open(TWEAKINJECT_LOG_PATH, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK | O_CLOEXEC, 0666);
+    if (fd < 0) {
+        fd = open(TWEAKINJECT_LOG_FALLBACK, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK | O_CLOEXEC, 0666);
+    }
+    if (fd >= 0) {
+        fchmod(fd, 0666);
+        write(fd, line, (size_t)lineLen);
+        close(fd);
+    }
+}
+
+#define TL_LOG(fmt, ...) tl_safe_log(fmt, ##__VA_ARGS__)
 
 char* sandbox_token = NULL;
 char* (* _sandbox_extension_issue_file)(const char*, const char*, uint32_t);
@@ -147,6 +183,10 @@ static int posix_spawn_launchd(pid_t * __restrict pid, const char * __restrict p
 exec:;
     int ret = ((int (*)(pid_t * __restrict, const char * __restrict, const posix_spawn_file_actions_t *, const posix_spawnattr_t * __restrict, char *const __argv[__restrict], char *const __envp[__restrict]))original_function)(pid, path, file_actions, attrp, __argv, envp);
     
+    if (ret == 0 && notLaunchd && path) {
+        TL_LOG("[LaunchdHook] Armed tweakLoader injection for %s (pid %d)", path, pid ? *pid : 0);
+    }
+
     if (allocated_sandbox_token) {
         free(allocated_sandbox_token);
     }
@@ -187,6 +227,7 @@ static void __attribute__((constructor)) init_launchd_hooks(void) {
             if (marker >= 0) {
                 close(marker);
             }
+            TL_LOG("[LaunchdHook] Successfully hooked posix_spawn and posix_spawnp");
         }
     }
 }

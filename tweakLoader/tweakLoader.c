@@ -526,6 +526,8 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
         }
     }
 
+    TL_LOG("[TweakLoader] Active in %s (pid %d)", procName[0] ? procName : "process", getpid());
+
     // 3. Denylist check
     if (is_injection_denied_for_process(procName, execPath, mainBundleId)) {
         TL_LOG("[TweakLoader] %s is denied, skipping injection", procName);
