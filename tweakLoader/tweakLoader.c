@@ -487,6 +487,17 @@ int64_t (*_sandbox_extension_consume)(const char* token);
 
 __attribute__((constructor)) static void init_tweak_loader(void) {
 
+    // 0. Pre-flight check: if injection is suspended or essential dependency missing, abort
+    if (access("/var/run/tweakinject.disabled", F_OK) == 0 ||
+        access("/Library/TweakInject/.disabled", F_OK) == 0) {
+        TL_LOG("[TweakLoader] Injection is suspended, skipping");
+        return;
+    }
+    if (access("/Library/TweakInject/libellekit.dylib", F_OK) != 0) {
+        TL_LOG("[TweakLoader] Essential dependency libellekit.dylib is missing, skipping");
+        return;
+    }
+
     // 1. Consume App Sandbox extension if provided
     void* libSystemSandboxHandle = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_NOW);
     if (libSystemSandboxHandle) {
@@ -546,18 +557,28 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
         return;
     }
 
-    DIR* smDir = opendir(safeModePath);
-    if (smDir) {
-        struct dirent* smEntry;
-        while ((smEntry = readdir(smDir)) != NULL) {
-            size_t nlen = strlen(smEntry->d_name);
-            if (nlen > 4 && strcmp(smEntry->d_name + nlen - 4, ".txt") == 0) {
-                closedir(smDir);
-                TL_LOG("[TweakLoader] SafeMode active, skipping injection");
-                return;
+    int safe_mode_found = (access("/var/run/tweakinject.safemode", F_OK) == 0);
+    if (!safe_mode_found) {
+        DIR* smDir = opendir(safeModePath);
+        if (smDir) {
+            struct dirent* smEntry;
+            while ((smEntry = readdir(smDir)) != NULL) {
+                size_t nlen = strlen(smEntry->d_name);
+                if (nlen > 4 && strcmp(smEntry->d_name + nlen - 4, ".txt") == 0) {
+                    safe_mode_found = 1;
+                    break;
+                }
             }
+            closedir(smDir);
         }
-        closedir(smDir);
+    }
+
+    if (safe_mode_found) {
+        if (strcmp(procName, "MenuBarAgent") == 0 || strcmp(procName, "Finder") == 0 || strcmp(procName, "Dock") == 0) {
+            dlopen("/Library/TweakInject/libsafeModePill.dylib", RTLD_NOW);
+        }
+        TL_LOG("[TweakLoader] SafeMode active, handled indicator for %s, skipping regular tweaks", procName);
+        return;
     }
 
     // 5. Scan and load tweaks in deterministic alphabetical order

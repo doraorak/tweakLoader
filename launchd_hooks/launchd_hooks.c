@@ -75,31 +75,106 @@ static void *orig_posix_spawn;
 static void *orig_posix_spawnp;
 
 static const char *process_blacklist[] = {
+    // Core system log & diagnostics
     "logd",
     "syslogd",
     "diagnosticd",
     "notifyd",
     "distnoted",
     "configd",
+    // Security, Authentication & Login Framework (DO NOT INJECT — causes loginwindow deadlocks on ldrestart)
     "opendirectoryd",
     "sandboxd",
     "securityd",
+    "securityd_system",
+    "secd",
+    "secinitd",
     "trustd",
     "amfid",
     "GSSCred",
-    "systemstats",
-    "AccessibilityUIServer",
+    "loginwindow",
+    "LoginUserService",
+    "SecurityAgent",
+    "authorizationhost",
+    "authd",
+    "coreauthd",
+    "online-auth-agent",
+    "applekeystored",
+    "keybagd",
+    "biometrickitd",
+    "taskgated",
     "UserSelector",
     "ScreenTimeAgent",
-    // The managing front-end and its privileged helper. Whatever installs and
-    // controls tweaks is the trusted path, and a tweak loaded into it could
-    // subvert the very thing meant to govern tweaks. denyInjectionList.plist
-    // already stops tweaks loading there, but that check runs INSIDE the loader,
-    // i.e. after our code is in the process — excluding them here means the loader
-    // is never mapped in at all.
+    "UserEventAgent",
+    "runningboardd",
+    "containermanagerd",
+    "containermanagerd_system",
+    "systemstats",
+    "AccessibilityUIServer",
+    // Storage & Power
+    "diskarbitrationd",
+    "powerd",
+    "kernelmanagerd",
+    // The managing front-end and privileged helper
     "TweakInject",
     "com.doraorak.tweakinject.helper",
 };
+
+#define INJECTION_DISABLED_MARKER "/var/run/tweakinject.disabled"
+#define INJECTION_DISABLED_DIR    "/Library/TweakInject/.disabled"
+
+static int is_injection_disabled(void) {
+    // 1. If tweakLoader dylib does not exist on disk, injection MUST NOT be armed
+    if (access(TWEAK_LOADER_DYLIB_PATH, F_OK) != 0) {
+        return 1;
+    }
+    // 2. If explicit disabled marker exists (e.g. paused/suspended injection)
+    if (access(INJECTION_DISABLED_MARKER, F_OK) == 0 || access(INJECTION_DISABLED_DIR, F_OK) == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+/// Returns an environment with every injection variable removed.
+///
+/// Used on the paths where we have decided NOT to inject: leaving an inherited
+/// DYLD_INSERT_LIBRARIES in place is indistinguishable from injecting on purpose.
+/// Returns __envp untouched when there is nothing to strip or the allocation
+/// fails, so the spawn always proceeds.
+static char *const *strip_injection_env(char *const *__envp, char ***out_allocated) {
+    if (__envp == NULL) {
+        return __envp;
+    }
+
+    size_t count = 0, dirty = 0;
+    while (__envp[count] != NULL) {
+        if (strncmp(__envp[count], "DYLD_INSERT_LIBRARIES=", 22) == 0 ||
+            strncmp(__envp[count], "TL_SANDBOX_TOKEN=", 17) == 0 ||
+            strncmp(__envp[count], "SANDBOX_TOKEN=", 14) == 0) {
+            dirty++;
+        }
+        count++;
+    }
+    if (dirty == 0) {
+        return __envp;
+    }
+
+    char **clean = malloc((count + 1) * sizeof(char *));
+    if (!clean) {
+        return __envp;
+    }
+
+    size_t dst = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (strncmp(__envp[i], "DYLD_INSERT_LIBRARIES=", 22) == 0) continue;
+        if (strncmp(__envp[i], "TL_SANDBOX_TOKEN=", 17) == 0) continue;
+        if (strncmp(__envp[i], "SANDBOX_TOKEN=", 14) == 0) continue;
+        clean[dst++] = __envp[i];
+    }
+    clean[dst] = NULL;
+    *out_allocated = clean;
+    return clean;
+}
 
 static int is_path_blacklisted_from_injection(const char *path) {
     if (path == NULL) {
@@ -127,63 +202,71 @@ static int posix_spawn_launchd(pid_t * __restrict pid, const char * __restrict p
     char *const *envp = __envp;
     char *allocated_sandbox_token = NULL;
     char **allocated_envp = NULL;
+    int armed_injection = 0;
     
-    if (is_path_blacklisted_from_injection(path)) {
+    if (is_path_blacklisted_from_injection(path) || is_injection_disabled()) {
+        // Blacklisting has to STRIP, not merely decline to add.
+        //
+        // Declining leaves __envp exactly as inherited -- and for anything
+        // launchd spawns through xpcproxy, that environment already carries
+        // DYLD_INSERT_LIBRARIES pointing at xpcproxy_hooks.dylib, put there when
+        // xpcproxy itself was spawned. So the blacklist stopped tweakLoader and
+        // let a different unsigned dylib through, into exactly the processes the
+        // list exists to protect. On a security-critical target such as
+        // SecurityAgent that is enough to fail library validation and never
+        // start, which is what leaves the login window blank.
+        envp = strip_injection_env(__envp, &allocated_envp);
         goto exec;
     }
     
     int notLaunchd = path != NULL && strcmp(path, "/sbin/launchd") != 0;
     if (notLaunchd && __envp != NULL) {
         int is_xpcproxy = strstr(path, "xpcproxy") != NULL;
+        if (is_xpcproxy && access(XPCPROXY_HOOKS_DYLIB_PATH, F_OK) != 0) {
+            goto exec;
+        }
         char *dylib_to_inject = is_xpcproxy ? "DYLD_INSERT_LIBRARIES=" XPCPROXY_HOOKS_DYLIB_PATH : "DYLD_INSERT_LIBRARIES=" TWEAK_LOADER_DYLIB_PATH;
         
-        size_t envp_size = 0;
-        while (__envp[envp_size] != NULL) {
-            envp_size++;
+        size_t count = 0;
+        while (__envp[count] != NULL) {
+            count++;
         }
-        envp_size++;
         
-        if (sandbox_token) {
-            size_t new_size = envp_size + 2;
-            char **new_envp = malloc(new_size * sizeof(char *));
-            if (new_envp) {
-                for (size_t i = 0; i < envp_size - 1; i++) {
-                    new_envp[i] = __envp[i];
-                }
-                
+        // Allocate space for cleaned entries + new injection vars + NULL terminator
+        char **new_envp = malloc((count + 4) * sizeof(char *));
+        if (new_envp) {
+            size_t dst = 0;
+            for (size_t i = 0; i < count; i++) {
+                // Deduplicate and strip any existing injection variables
+                if (strncmp(__envp[i], "DYLD_INSERT_LIBRARIES=", 22) == 0) continue;
+                if (strncmp(__envp[i], "TL_SANDBOX_TOKEN=", 17) == 0) continue;
+                if (strncmp(__envp[i], "SANDBOX_TOKEN=", 14) == 0) continue;
+                new_envp[dst++] = __envp[i];
+            }
+            
+            new_envp[dst++] = dylib_to_inject;
+            
+            if (sandbox_token) {
                 size_t sandbox_token_env_size = strlen(sandbox_token) + sizeof("TL_SANDBOX_TOKEN=");
                 char *sandbox_token_env = malloc(sandbox_token_env_size);
                 if (sandbox_token_env) {
                     snprintf(sandbox_token_env, sandbox_token_env_size, "TL_SANDBOX_TOKEN=%s", sandbox_token);
                     allocated_sandbox_token = sandbox_token_env;
+                    new_envp[dst++] = sandbox_token_env;
                 }
-                
-                new_envp[new_size - 3] = dylib_to_inject;
-                new_envp[new_size - 2] = sandbox_token_env;
-                new_envp[new_size - 1] = NULL;
-                envp = new_envp;
-                allocated_envp = new_envp;
             }
-        } else {
-            size_t new_size = envp_size + 1;
-            char **new_envp = malloc(new_size * sizeof(char *));
-            if (new_envp) {
-                for (size_t i = 0; i < envp_size - 1; i++) {
-                    new_envp[i] = __envp[i];
-                }
-                
-                new_envp[new_size - 2] = dylib_to_inject;
-                new_envp[new_size - 1] = NULL;
-                envp = new_envp;
-                allocated_envp = new_envp;
-            }
+            
+            new_envp[dst] = NULL;
+            envp = new_envp;
+            allocated_envp = new_envp;
+            armed_injection = 1;
         }
     }
 
 exec:;
     int ret = ((int (*)(pid_t * __restrict, const char * __restrict, const posix_spawn_file_actions_t *, const posix_spawnattr_t * __restrict, char *const __argv[__restrict], char *const __envp[__restrict]))original_function)(pid, path, file_actions, attrp, __argv, envp);
     
-    if (ret == 0 && notLaunchd && path) {
+    if (ret == 0 && armed_injection && path) {
         TL_LOG("[LaunchdHook] Armed tweakLoader injection for %s (pid %d)", path, pid ? *pid : 0);
     }
 
