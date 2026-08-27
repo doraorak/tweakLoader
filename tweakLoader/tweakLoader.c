@@ -14,21 +14,65 @@
 #include <dlfcn.h>
 #include <libproc.h>
 #include <objc/runtime.h>
-/// Logging is OFF by default and should normally stay that way.
-///
-/// This code runs inside EVERY process that launches, logd included. os_log() from
-/// a constructor in logd deadlocks logd, and once logging is wedged the rest of the
-/// system follows — a machine in that state usually needs a reboot to recover.
-/// Enable only while debugging something you cannot reach otherwise, and only when
-/// you can afford to lose the box.
-#define ENABLE_LOGS 0
+#include <sys/time.h>
+#include <time.h>
+#include <stdarg.h>
 
-#if ENABLE_LOGS
-#include <os/log.h>
-#define TL_LOG(fmt, ...) TL_LOG(fmt, ##__VA_ARGS__)
-#else
-#define TL_LOG(fmt, ...) do {} while (0)
-#endif
+#define TWEAKINJECT_LOG_PATH     "/Library/TweakInject/tweakinject.log"
+#define TWEAKINJECT_LOG_FALLBACK "/tmp/tweakinject.log"
+#define TWEAKLOADER_ACTIVE_PATH  "/tmp/.tweakloader_active"
+
+/// Safe, deadlock-free file logging that avoids os_log / logd IPC deadlocks.
+static void tl_safe_log(const char* fmt, ...) {
+    const char* prog = getprogname();
+    if (prog && (strcmp(prog, "logd") == 0 || strcmp(prog, "diagnosticd") == 0)) {
+        return;
+    }
+
+    char body[1024];
+    va_list args;
+    va_start(args, fmt);
+    int bodyLen = vsnprintf(body, sizeof(body) - 2, fmt, args);
+    va_end(args);
+
+    if (bodyLen <= 0) return;
+
+    if (body[bodyLen - 1] != '\n') {
+        body[bodyLen] = '\n';
+        body[bodyLen + 1] = '\0';
+        bodyLen++;
+    }
+
+    time_t now = time(NULL);
+    struct tm tm_buf;
+    localtime_r(&now, &tm_buf);
+    char timeStr[32];
+    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &tm_buf);
+
+    char line[1280];
+    int lineLen = snprintf(line, sizeof(line), "[%s] [%s:%d] %s", timeStr, prog ? prog : "unknown", getpid(), body);
+    if (lineLen <= 0) return;
+
+    int fd = open(TWEAKINJECT_LOG_PATH, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK | O_CLOEXEC, 0666);
+    if (fd < 0) {
+        fd = open(TWEAKINJECT_LOG_FALLBACK, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK | O_CLOEXEC, 0666);
+    }
+    if (fd >= 0) {
+        write(fd, line, (size_t)lineLen);
+        close(fd);
+    }
+
+    // Touch active marker
+    int marker = open(TWEAKLOADER_ACTIVE_PATH, O_WRONLY | O_CREAT | O_TRUNC | O_NONBLOCK | O_CLOEXEC, 0666);
+    if (marker >= 0) {
+        char hb[64];
+        int hbLen = snprintf(hb, sizeof(hb), "%ld %d\n", (long)now, getpid());
+        if (hbLen > 0) write(marker, hb, (size_t)hbLen);
+        close(marker);
+    }
+}
+
+#define TL_LOG(fmt, ...) tl_safe_log(fmt, ##__VA_ARGS__)
 
 #include <sys/sysctl.h>
 #include <sys/stat.h>
@@ -484,7 +528,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
 
     // 3. Denylist check
     if (is_injection_denied_for_process(procName, execPath, mainBundleId)) {
-        TL_LOG("[TweakLoader] %{public}s is denied, skipping injection", procName);
+        TL_LOG("[TweakLoader] %s is denied, skipping injection", procName);
         return;
     }
 
@@ -566,13 +610,13 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
             }
 
             if (is_injection_allowed_for_process_by_filter(filterDict, procName, execPath, mainBundle, bundlePath, mainBundleId)) {
-                TL_LOG("[TweakLoader] Injecting %{public}s into %{public}s (pid %d)", dylibFullPath, procName, getpid());
+                TL_LOG("[TweakLoader] Injecting %s into %s (pid %d)", dylibFullPath, procName, getpid());
                 void* handle = dlopen(dylibFullPath, RTLD_NOW);
                 if (handle) {
-                    TL_LOG("[TweakLoader] Injected %{public}s successfully", dylibFullPath);
+                    TL_LOG("[TweakLoader] Injected %s successfully", dylibFullPath);
                 } else {
                     const char* dlErr = dlerror();
-                    TL_LOG("[TweakLoader] dlopen failed for %{public}s: %{public}s", dylibFullPath, dlErr ? dlErr : "unknown");
+                    TL_LOG("[TweakLoader] dlopen failed for %s: %s", dylibFullPath, dlErr ? dlErr : "unknown");
                 }
             }
         }
