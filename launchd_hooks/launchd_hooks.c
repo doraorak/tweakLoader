@@ -7,7 +7,7 @@
 #include <stdarg.h>
 #include <sys/stat.h>
 
-#define TWEAKINJECT_LOG_PATH     "/Library/TweakInject/tweakinject.log"
+#define TWEAKINJECT_LOG_PATH     "/Library/TweakInject/logs/tweakinject.log"
 #define TWEAKINJECT_LOG_FALLBACK "/tmp/tweakinject.log"
 
 /// Safe, deadlock-free file logging that avoids os_log / logd IPC deadlocks.
@@ -55,6 +55,7 @@ static void tl_safe_log(const char* fmt, ...) {
 #define TL_LOG(fmt, ...) tl_safe_log(fmt, ##__VA_ARGS__)
 
 char* sandbox_token = NULL;
+char* sandbox_token_rw = NULL;
 char* (* _sandbox_extension_issue_file)(const char*, const char*, uint32_t);
 
 #define XPCPROXY_HOOKS_DYLIB_PATH "/Library/TweakInject/LaunchdHook/xpcproxy_hooks.dylib"
@@ -233,13 +234,14 @@ static int posix_spawn_launchd(pid_t * __restrict pid, const char * __restrict p
         }
         
         // Allocate space for cleaned entries + new injection vars + NULL terminator
-        char **new_envp = malloc((count + 4) * sizeof(char *));
+        char **new_envp = malloc((count + 6) * sizeof(char *));
         if (new_envp) {
             size_t dst = 0;
             for (size_t i = 0; i < count; i++) {
                 // Deduplicate and strip any existing injection variables
                 if (strncmp(__envp[i], "DYLD_INSERT_LIBRARIES=", 22) == 0) continue;
                 if (strncmp(__envp[i], "TL_SANDBOX_TOKEN=", 17) == 0) continue;
+                if (strncmp(__envp[i], "TL_SANDBOX_TOKEN_RW=", 20) == 0) continue;
                 if (strncmp(__envp[i], "SANDBOX_TOKEN=", 14) == 0) continue;
                 new_envp[dst++] = __envp[i];
             }
@@ -253,6 +255,15 @@ static int posix_spawn_launchd(pid_t * __restrict pid, const char * __restrict p
                     snprintf(sandbox_token_env, sandbox_token_env_size, "TL_SANDBOX_TOKEN=%s", sandbox_token);
                     allocated_sandbox_token = sandbox_token_env;
                     new_envp[dst++] = sandbox_token_env;
+                }
+            }
+            
+            if (sandbox_token_rw) {
+                size_t rw_size = strlen(sandbox_token_rw) + sizeof("TL_SANDBOX_TOKEN_RW=");
+                char *rw_env = malloc(rw_size);
+                if (rw_env) {
+                    snprintf(rw_env, rw_size, "TL_SANDBOX_TOKEN_RW=%s", sandbox_token_rw);
+                    new_envp[dst++] = rw_env;
                 }
             }
             
@@ -296,6 +307,10 @@ static void __attribute__((constructor)) init_launchd_hooks(void) {
         _sandbox_extension_issue_file = dlsym(libSystemSandboxHandle, "sandbox_extension_issue_file");
         if (_sandbox_extension_issue_file) {
             sandbox_token = _sandbox_extension_issue_file("com.apple.app-sandbox.read", TWEAK_INJECT_PATH, 0);
+            sandbox_token_rw = _sandbox_extension_issue_file("com.apple.app-sandbox.read-write", "/Library/TweakInject/logs/", 0);
+            if (!sandbox_token_rw) {
+                sandbox_token_rw = _sandbox_extension_issue_file("com.apple.app-sandbox.read-write", "/Library/TweakInject/logs", 0);
+            }
         }
     }
     

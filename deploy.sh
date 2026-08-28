@@ -1,20 +1,19 @@
 #!/bin/bash
 #
-# Build the payload and install it, refusing to install anything it cannot verify.
+# Installs the payload from the app bundle into /Library/TweakInject.
 #
-# This exists because of a specific failure. The documented build steps copied
-# from ./build/Release, which Xcode stopped writing to at some point; the real
-# products go to DerivedData. So every "rebuild and deploy" for an unknown number
-# of sessions shipped a stale artifact, and the blacklist protecting the login
-# and authentication stack — written, committed, believed to be live — was never
-# in the running system. The symptom was a second `ldrestart` hanging at a blank
-# login window, which looks nothing like a build problem.
+# Building is no longer this script's job. The app's own build now builds every
+# component and refreshes its Payload/ (see scripts/build-payload.sh in the app
+# project, wired in as a pre-build phase), so there is exactly one way to
+# produce a payload and it cannot be skipped by forgetting a command. This is
+# only the privileged copy onto this machine, for when you want it without
+# opening the app.
 #
-# Copying from a path is therefore not enough. Every install below is checked for
-# a string that only the current source can produce, and the script stops if it
-# is missing.
+# Prefer the app: the payload station installs the same files through the
+# helper, and it also knows how to tell you when what is installed is older than
+# what the app ships.
 #
-#   ./deploy.sh            build, verify, install (asks for your password once)
+#   ./deploy.sh            install from the built app bundle (asks for your password)
 #   ./deploy.sh --verify   verify what is currently installed, install nothing
 #
 set -euo pipefail
@@ -28,7 +27,7 @@ APP_PAYLOAD="/Users/doraorak/Desktop/programming/XCode-projects/APP/My apps/Twea
 # build does not. Update these whenever the thing they prove changes.
 CANARY_launchd_hooks="SecurityAgent"
 CANARY_xpcproxy_hooks="SecurityAgent"
-CANARY_libtweakLoader="/Library/TweakInject/tweakinject.log"
+CANARY_libtweakLoader="/Library/TweakInject/logs/tweakinject.log"
 
 products_dir() {
     xcodebuild -project "$PROJECT" -scheme "$1" -configuration Release \
@@ -56,45 +55,38 @@ if [ "${1:-}" = "--verify" ]; then
     exit 0
 fi
 
-echo "Building…"
-for scheme in launchd_hooks xpcproxy_hooks tweakLoader ldrestart; do
-    xcodebuild -project "$PROJECT" -scheme "$scheme" -configuration Release build \
-        >/dev/null 2>&1 || { echo "  ✗ $scheme failed to build"; exit 1; }
-    echo "  built $scheme"
-done
-
-DD="$(products_dir launchd_hooks)"
-[ -n "$DD" ] || { echo "could not resolve BUILT_PRODUCTS_DIR"; exit 1; }
-echo "Products: $DD"
+APP="$(ls -d "$HOME/Library/Developer/Xcode/DerivedData/TweakInject-"*/Build/Products/Debug/TweakInject.app 2>/dev/null | head -1)"
+[ -n "$APP" ] || { echo "No built TweakInject.app found. Build the app first."; exit 1; }
+DD="$APP/Contents/Resources/Payload"
+echo "Source: $DD"
 
 echo "Verifying before install…"
-verify "$DD/launchd_hooks.dylib"  "$CANARY_launchd_hooks"  "launchd_hooks"
-verify "$DD/xpcproxy_hooks.dylib" "$CANARY_xpcproxy_hooks" "xpcproxy_hooks"
+verify "$DD/LaunchdHook/launchd_hooks.dylib"  "$CANARY_launchd_hooks"  "launchd_hooks"
+verify "$DD/LaunchdHook/xpcproxy_hooks.dylib" "$CANARY_xpcproxy_hooks" "xpcproxy_hooks"
 verify "$DD/libtweakLoader.dylib" "$CANARY_libtweakLoader" "libtweakLoader"
 
 # PID 1 is arm64e. A slice-less or arm64-only build silently fails to inject.
 for d in launchd_hooks xpcproxy_hooks; do
-    lipo -archs "$DD/$d.dylib" | grep -q arm64e \
+    lipo -archs "$DD/LaunchdHook/$d.dylib" | grep -q arm64e \
         || { echo "  ✗ $d.dylib has no arm64e slice — launchd will not load it"; exit 1; }
 done
 echo "  ✓ arm64e slices present"
 
 echo "Installing (sudo)…"
-sudo mkdir -p "$INSTALL_ROOT/LaunchdHook"
-sudo cp "$DD/launchd_hooks.dylib"  "$INSTALL_ROOT/LaunchdHook/launchd_hooks.dylib"
-sudo cp "$DD/xpcproxy_hooks.dylib" "$INSTALL_ROOT/LaunchdHook/xpcproxy_hooks.dylib"
+sudo mkdir -p "$INSTALL_ROOT/LaunchdHook" "$INSTALL_ROOT/SafeMode"
+sudo cp "$DD/LaunchdHook/launchd_hooks.dylib"  "$INSTALL_ROOT/LaunchdHook/launchd_hooks.dylib"
+sudo cp "$DD/LaunchdHook/xpcproxy_hooks.dylib" "$INSTALL_ROOT/LaunchdHook/xpcproxy_hooks.dylib"
 sudo cp "$DD/libtweakLoader.dylib" "$INSTALL_ROOT/libtweakLoader.dylib"
 [ -f "$DD/ldrestart" ] && sudo cp "$DD/ldrestart" /usr/local/bin/ldrestart
 
-# The app bundle ships its own copy; leaving it stale reinstates the old payload
-# the next time the app repairs itself.
-if [ -d "$APP_PAYLOAD" ]; then
-    cp "$DD/launchd_hooks.dylib"  "$APP_PAYLOAD/launchd_hooks.dylib"
-    cp "$DD/xpcproxy_hooks.dylib" "$APP_PAYLOAD/xpcproxy_hooks.dylib"
-    cp "$DD/libtweakLoader.dylib" "$APP_PAYLOAD/libtweakLoader.dylib"
-    [ -f "$DD/ldrestart" ] && cp "$DD/ldrestart" "$APP_PAYLOAD/ldrestart"
-    echo "  ✓ app Payload/ updated"
-fi
+# The pill lives beside the Safe Mode markers it advertises. Deploying the
+# loader without it leaves the loader dlopen()ing a path that does not exist.
+sudo cp "$DD/libsafeModePill.dylib" "$INSTALL_ROOT/SafeMode/libsafeModePill.dylib"
+# It used to live in the payload root; nothing loads it from there any more.
+sudo rm -f "$INSTALL_ROOT/libsafeModePill.dylib"
+sudo chown -R root:wheel "$INSTALL_ROOT/SafeMode"
+sudo chmod 755 "$INSTALL_ROOT/SafeMode"
+[ -f "$INSTALL_ROOT/SafeMode/libsafeModePill.dylib" ] && sudo chmod 755 "$INSTALL_ROOT/SafeMode/libsafeModePill.dylib"
 
 echo "Verifying what is now installed…"
 verify "$INSTALL_ROOT/LaunchdHook/launchd_hooks.dylib"  "$CANARY_launchd_hooks"  "launchd_hooks"

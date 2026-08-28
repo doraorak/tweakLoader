@@ -24,6 +24,7 @@
 #define TWEAK_LOADER_DYLIB_PATH "/Library/TweakInject/libtweakLoader.dylib"
 
 char* sandbox_token = NULL;
+char* sandbox_token_rw = NULL;
 
 static const char *process_blacklist[] = {
     // Core system log & diagnostics
@@ -99,6 +100,7 @@ static char *const *strip_injection_env(char *const *__envp, char ***out_allocat
     while (__envp[count] != NULL) {
         if (strncmp(__envp[count], "DYLD_INSERT_LIBRARIES=", 22) == 0 ||
             strncmp(__envp[count], "TL_SANDBOX_TOKEN=", 17) == 0 ||
+            strncmp(__envp[count], "TL_SANDBOX_TOKEN_RW=", 20) == 0 ||
             strncmp(__envp[count], "SANDBOX_TOKEN=", 14) == 0) {
             dirty++;
         }
@@ -117,6 +119,7 @@ static char *const *strip_injection_env(char *const *__envp, char ***out_allocat
     for (size_t i = 0; i < count; i++) {
         if (strncmp(__envp[i], "DYLD_INSERT_LIBRARIES=", 22) == 0) continue;
         if (strncmp(__envp[i], "TL_SANDBOX_TOKEN=", 17) == 0) continue;
+        if (strncmp(__envp[i], "TL_SANDBOX_TOKEN_RW=", 20) == 0) continue;
         if (strncmp(__envp[i], "SANDBOX_TOKEN=", 14) == 0) continue;
         clean[dst++] = __envp[i];
     }
@@ -150,6 +153,7 @@ static int posix_spawn_xpcproxy(pid_t * __restrict pid, const char * __restrict 
     
     char *const *envp = __envp;
     char *allocated_sandbox_token = NULL;
+    char *allocated_sandbox_token_rw = NULL;
     char **allocated_envp = NULL;
 
     int should_hook = !is_path_blacklisted_from_injection(path) && !is_injection_disabled() && __envp != NULL;
@@ -167,12 +171,13 @@ static int posix_spawn_xpcproxy(pid_t * __restrict pid, const char * __restrict 
             count++;
         }
 
-        char **new_envp = malloc((count + 4) * sizeof(char *));
+        char **new_envp = malloc((count + 6) * sizeof(char *));
         if (new_envp) {
             size_t dst = 0;
             for (size_t i = 0; i < count; i++) {
                 if (strncmp(__envp[i], "DYLD_INSERT_LIBRARIES=", 22) == 0) continue;
                 if (strncmp(__envp[i], "TL_SANDBOX_TOKEN=", 17) == 0) continue;
+                if (strncmp(__envp[i], "TL_SANDBOX_TOKEN_RW=", 20) == 0) continue;
                 if (strncmp(__envp[i], "SANDBOX_TOKEN=", 14) == 0) continue;
                 new_envp[dst++] = __envp[i];
             }
@@ -189,6 +194,16 @@ static int posix_spawn_xpcproxy(pid_t * __restrict pid, const char * __restrict 
                 }
             }
 
+            if (sandbox_token_rw) {
+                size_t rw_size = strlen(sandbox_token_rw) + sizeof("TL_SANDBOX_TOKEN_RW=");
+                char *rw_env = malloc(rw_size);
+                if (rw_env) {
+                    snprintf(rw_env, rw_size, "TL_SANDBOX_TOKEN_RW=%s", sandbox_token_rw);
+                    allocated_sandbox_token_rw = rw_env;
+                    new_envp[dst++] = rw_env;
+                }
+            }
+
             new_envp[dst] = NULL;
             envp = new_envp;
             allocated_envp = new_envp;
@@ -199,6 +214,9 @@ static int posix_spawn_xpcproxy(pid_t * __restrict pid, const char * __restrict 
 
     if (allocated_sandbox_token) {
         free(allocated_sandbox_token);
+    }
+    if (allocated_sandbox_token_rw) {
+        free(allocated_sandbox_token_rw);
     }
     if (allocated_envp) {
         free(allocated_envp);
@@ -225,5 +243,9 @@ static void __attribute__((constructor)) init_xpcproxy_hooks(void) {
     }
     if (token) {
         sandbox_token = strdup(token);
+    }
+    char *token_rw = getenv("TL_SANDBOX_TOKEN_RW");
+    if (token_rw) {
+        sandbox_token_rw = strdup(token_rw);
     }
 }

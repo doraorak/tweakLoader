@@ -18,7 +18,7 @@
 #include <time.h>
 #include <stdarg.h>
 
-#define TWEAKINJECT_LOG_PATH     "/Library/TweakInject/tweakinject.log"
+#define TWEAKINJECT_LOG_PATH     "/Library/TweakInject/logs/tweakinject.log"
 #define TWEAKINJECT_LOG_FALLBACK "/tmp/tweakinject.log"
 #define TWEAKLOADER_ACTIVE_PATH  "/tmp/.tweakloader_active"
 
@@ -487,7 +487,29 @@ int64_t (*_sandbox_extension_consume)(const char* token);
 
 __attribute__((constructor)) static void init_tweak_loader(void) {
 
-    // 0. Pre-flight check: if injection is suspended or essential dependency missing, abort
+    // 1. Consume App Sandbox extensions FIRST so subsequent access() checks succeed in sandboxed apps (Notes, Mail, etc.)
+    void* libSystemSandboxHandle = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_NOW);
+    if (libSystemSandboxHandle) {
+        _sandbox_extension_consume = dlsym(libSystemSandboxHandle, "sandbox_extension_consume");
+        if (_sandbox_extension_consume) {
+            char* sandbox_token = getenv("TL_SANDBOX_TOKEN"); if (!sandbox_token) sandbox_token = getenv("SANDBOX_TOKEN");
+            if (sandbox_token) {
+                int64_t handle = _sandbox_extension_consume(sandbox_token);
+                if (handle > 0) {
+                    TL_LOG("[TweakLoader] Read sandbox extension consumed successfully");
+                }
+            }
+            char* sandbox_token_rw = getenv("TL_SANDBOX_TOKEN_RW");
+            if (sandbox_token_rw) {
+                int64_t handle_rw = _sandbox_extension_consume(sandbox_token_rw);
+                if (handle_rw > 0) {
+                    TL_LOG("[TweakLoader] Read-write logs sandbox extension consumed successfully");
+                }
+            }
+        }
+    }
+
+    // 2. Pre-flight check: if injection is suspended or essential dependency missing, abort
     if (access("/var/run/tweakinject.disabled", F_OK) == 0 ||
         access("/Library/TweakInject/.disabled", F_OK) == 0) {
         TL_LOG("[TweakLoader] Injection is suspended, skipping");
@@ -498,22 +520,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
         return;
     }
 
-    // 1. Consume App Sandbox extension if provided
-    void* libSystemSandboxHandle = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_NOW);
-    if (libSystemSandboxHandle) {
-        _sandbox_extension_consume = dlsym(libSystemSandboxHandle, "sandbox_extension_consume");
-        if (_sandbox_extension_consume) {
-            char* sandbox_token = getenv("TL_SANDBOX_TOKEN"); if (!sandbox_token) sandbox_token = getenv("SANDBOX_TOKEN");
-            if (sandbox_token) {
-                int64_t handle = _sandbox_extension_consume(sandbox_token);
-                if (handle > 0) {
-                    TL_LOG("[TweakLoader] Sandbox extension consumed successfully");
-                }
-            }
-        }
-    }
-
-    // 2. Identify current process
+    // 3. Identify current process
     char procName[256] = {0};
     proc_name(getpid(), procName, sizeof(procName));
 
@@ -575,7 +582,7 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
 
     if (safe_mode_found) {
         if (strcmp(procName, "MenuBarAgent") == 0 || strcmp(procName, "Finder") == 0 || strcmp(procName, "Dock") == 0) {
-            dlopen("/Library/TweakInject/libsafeModePill.dylib", RTLD_NOW);
+            dlopen("/Library/TweakInject/SafeMode/libsafeModePill.dylib", RTLD_NOW);
         }
         TL_LOG("[TweakLoader] SafeMode active, handled indicator for %s, skipping regular tweaks", procName);
         return;
