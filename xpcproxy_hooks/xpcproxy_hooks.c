@@ -34,6 +34,9 @@ static const char *process_blacklist[] = {
     "notifyd",
     "distnoted",
     "configd",
+    // Core launch & session supervision
+    "launchd",
+    "sessionproxy",
     // Security, Authentication & Login Framework (DO NOT INJECT — causes loginwindow deadlocks on ldrestart)
     "opendirectoryd",
     "sandboxd",
@@ -42,7 +45,6 @@ static const char *process_blacklist[] = {
     "secd",
     "secinitd",
     "trustd",
-    "amfid",
     "GSSCred",
     "loginwindow",
     "LoginUserService",
