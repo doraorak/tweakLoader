@@ -7,23 +7,14 @@
 	objects = {
 
 /* Begin PBXCopyFilesBuildPhase section */
-		14CA44542DF7ACBD00CEC5FC /* CopyFiles */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = /usr/share/man/man1/;
-			dstSubfolderSpec = 0;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 1;
-		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		14C40E622E017D1D00D07791 /* libtweakLoader.dylib */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.dylib"; includeInIndex = 0; path = libtweakLoader.dylib; sourceTree = BUILT_PRODUCTS_DIR; };
 		14C40E632E017D1D00D07791 /* libsafeMode.dylib */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.dylib"; includeInIndex = 0; path = libsafeMode.dylib; sourceTree = BUILT_PRODUCTS_DIR; };
+		14FF000000000000000000A1 /* libprefSupport.dylib */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.dylib"; includeInIndex = 0; path = libprefSupport.dylib; sourceTree = BUILT_PRODUCTS_DIR; };
 		14C40E642E017D1D00D07791 /* launchd_hooks.dylib */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.dylib"; includeInIndex = 0; path = launchd_hooks.dylib; sourceTree = BUILT_PRODUCTS_DIR; };
 		14C40E652E017D1D00D07791 /* xpcproxy_hooks.dylib */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.dylib"; includeInIndex = 0; path = xpcproxy_hooks.dylib; sourceTree = BUILT_PRODUCTS_DIR; };
-		14CA445D2DF7AD4200CEC5FC /* ldrestart */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ldrestart; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -37,6 +28,11 @@
 			path = safeMode;
 			sourceTree = "<group>";
 		};
+		14FF000000000000000000A2 /* prefSupport */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = prefSupport;
+			sourceTree = "<group>";
+		};
 		14BDD3DF2DA9C6D2009859FC /* launchd_hooks */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = launchd_hooks;
@@ -47,14 +43,16 @@
 			path = xpcproxy_hooks;
 			sourceTree = "<group>";
 		};
-		14CA44572DF7ACBD00CEC5FC /* ldrestart */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ldrestart;
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		14FF000000000000000000A5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		146A30A92D9D43D4007097AB /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -83,13 +81,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		14CA44532DF7ACBD00CEC5FC /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -97,21 +88,28 @@
 			isa = PBXGroup;
 			children = (
 				146A30AD2D9D43D4007097AB /* tweakLoader */,
+				14FF000000000000000000A2 /* prefSupport */,
 				146A30BC2D9DAAF6007097AB /* safeMode */,
 				14BDD3DF2DA9C6D2009859FC /* launchd_hooks */,
 				14BDD3FC2DA9C74C009859FC /* xpcproxy_hooks */,
-				14CA44572DF7ACBD00CEC5FC /* ldrestart */,
-				14CA445D2DF7AD4200CEC5FC /* ldrestart */,
 				14C40E622E017D1D00D07791 /* libtweakLoader.dylib */,
 				14C40E632E017D1D00D07791 /* libsafeMode.dylib */,
 				14C40E642E017D1D00D07791 /* launchd_hooks.dylib */,
 				14C40E652E017D1D00D07791 /* xpcproxy_hooks.dylib */,
+				14FF000000000000000000A1 /* libprefSupport.dylib */,
 			);
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXHeadersBuildPhase section */
+		14FF000000000000000000A3 /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		146A30A72D9D43D4007097AB /* Headers */ = {
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
@@ -143,6 +141,28 @@
 /* End PBXHeadersBuildPhase section */
 
 /* Begin PBXNativeTarget section */
+		14FF000000000000000000A6 /* prefSupport */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 14FF000000000000000000A7 /* Build configuration list for PBXNativeTarget "prefSupport" */;
+			buildPhases = (
+				14FF000000000000000000A3 /* Headers */,
+				14FF000000000000000000A4 /* Sources */,
+				14FF000000000000000000A5 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				14FF000000000000000000A2 /* prefSupport */,
+			);
+			name = prefSupport;
+			packageProductDependencies = (
+			);
+			productName = prefSupport;
+			productReference = 14FF000000000000000000A1 /* libprefSupport.dylib */;
+			productType = "com.apple.product-type.library.dynamic";
+		};
 		146A30AA2D9D43D4007097AB /* tweakLoader */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 146A30B42D9D43D4007097AB /* Build configuration list for PBXNativeTarget "tweakLoader" */;
@@ -231,28 +251,6 @@
 			productReference = 14C40E652E017D1D00D07791 /* xpcproxy_hooks.dylib */;
 			productType = "com.apple.product-type.library.dynamic";
 		};
-		14CA44552DF7ACBD00CEC5FC /* ldrestart */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 14CA445A2DF7ACBD00CEC5FC /* Build configuration list for PBXNativeTarget "ldrestart" */;
-			buildPhases = (
-				14CA44522DF7ACBD00CEC5FC /* Sources */,
-				14CA44532DF7ACBD00CEC5FC /* Frameworks */,
-				14CA44542DF7ACBD00CEC5FC /* CopyFiles */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				14CA44572DF7ACBD00CEC5FC /* ldrestart */,
-			);
-			name = ldrestart;
-			packageProductDependencies = (
-			);
-			productName = ldrestart;
-			productReference = 14CA445D2DF7AD4200CEC5FC /* ldrestart */;
-			productType = "com.apple.product-type.tool";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -296,14 +294,21 @@
 			targets = (
 				146A30AA2D9D43D4007097AB /* tweakLoader */,
 				146A30BA2D9DAAF6007097AB /* safeMode */,
+				14FF000000000000000000A6 /* prefSupport */,
 				14BDD3DD2DA9C6D2009859FC /* launchd_hooks */,
 				14BDD3EE2DA9C72D009859FC /* xpcproxy_hooks */,
-				14CA44552DF7ACBD00CEC5FC /* ldrestart */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXSourcesBuildPhase section */
+		14FF000000000000000000A4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		146A30A82D9D43D4007097AB /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -332,16 +337,53 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		14CA44522DF7ACBD00CEC5FC /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		14FF000000000000000000A8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = /Library/TweakInject;
+				EXECUTABLE_PREFIX = lib;
+				OTHER_LDFLAGS = (
+					"-framework",
+					Foundation,
+					"-framework",
+					CoreFoundation,
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		14FF000000000000000000A9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64e;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = /Library/TweakInject;
+				EXECUTABLE_PREFIX = lib;
+				OTHER_LDFLAGS = (
+					"-framework",
+					Foundation,
+					"-framework",
+					CoreFoundation,
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 		146A30B22D9D43D4007097AB /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -462,7 +504,7 @@
 			buildSettings = {
 				ARCHS = arm64e;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				EXECUTABLE_PREFIX = lib;
@@ -476,7 +518,7 @@
 			buildSettings = {
 				ARCHS = arm64e;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				EXECUTABLE_PREFIX = lib;
@@ -490,7 +532,7 @@
 			buildSettings = {
 				ARCHS = arm64e;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				EXECUTABLE_PREFIX = lib;
@@ -504,7 +546,7 @@
 			buildSettings = {
 				ARCHS = arm64e;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				EXECUTABLE_PREFIX = lib;
@@ -518,7 +560,7 @@
 			buildSettings = {
 				ARCHS = arm64e;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				EXECUTABLE_PREFIX = "";
@@ -533,7 +575,7 @@
 			buildSettings = {
 				ARCHS = arm64e;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				EXECUTABLE_PREFIX = "";
@@ -548,7 +590,7 @@
 			buildSettings = {
 				ARCHS = arm64e;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				EXECUTABLE_PREFIX = "";
@@ -563,7 +605,7 @@
 			buildSettings = {
 				ARCHS = arm64e;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3FC7C2PF4P;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				EXECUTABLE_PREFIX = "";
@@ -573,68 +615,18 @@
 			};
 			name = Release;
 		};
-		14CA445B2DF7ACBD00CEC5FC /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ARCHS = arm64e;
-				AUTOMATION_APPLE_EVENTS = NO;
-				CLANG_ENABLE_MODULES = YES;
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
-				ENABLE_APP_SANDBOX = NO;
-				ENABLE_HARDENED_RUNTIME = NO;
-				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
-				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
-				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
-				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
-				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
-				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
-				MACOSX_DEPLOYMENT_TARGET = 15.5;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
-				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
-				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
-				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
-				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
-				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 6.0;
-			};
-			name = Debug;
-		};
-		14CA445C2DF7ACBD00CEC5FC /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ARCHS = arm64e;
-				AUTOMATION_APPLE_EVENTS = NO;
-				CLANG_ENABLE_MODULES = YES;
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
-				ENABLE_APP_SANDBOX = NO;
-				ENABLE_HARDENED_RUNTIME = NO;
-				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
-				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
-				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
-				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
-				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
-				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
-				MACOSX_DEPLOYMENT_TARGET = 15.5;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
-				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
-				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
-				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
-				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
-				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
-				SWIFT_VERSION = 6.0;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		14FF000000000000000000A7 /* Build configuration list for PBXNativeTarget "prefSupport" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				14FF000000000000000000A8 /* Debug */,
+				14FF000000000000000000A9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		146A30A62D9D43D4007097AB /* Build configuration list for PBXProject "tweakLoader" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -676,15 +668,6 @@
 			buildConfigurations = (
 				14BDD3F62DA9C72D009859FC /* Debug */,
 				14BDD3F72DA9C72D009859FC /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		14CA445A2DF7ACBD00CEC5FC /* Build configuration list for PBXNativeTarget "ldrestart" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				14CA445B2DF7ACBD00CEC5FC /* Debug */,
-				14CA445C2DF7ACBD00CEC5FC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
