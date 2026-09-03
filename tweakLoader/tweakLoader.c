@@ -14,13 +14,31 @@
 #include <dlfcn.h>
 #include <libproc.h>
 #include <objc/runtime.h>
+#include <sys/sysctl.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <stdarg.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <strings.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
 
-#define TWEAKINJECT_LOG_PATH     "/Library/TweakInject/logs/tweakinject.log"
-#define TWEAKINJECT_LOG_FALLBACK "/tmp/tweakinject.log"
-#define TWEAKLOADER_ACTIVE_PATH  "/tmp/.tweakloader_active"
+#define tl_log_path              "/Library/TweakInject/logs/tweakinject.log"
+#define tl_log_fallback          "/tmp/tweakinject.log"
+#define tl_active_path           "/tmp/.tweakloader_active"
+#define tl_bundles_path          "/Library/TweakInject/Tweaks/Bundles/"
+#define tl_dylibs_path           "/Library/TweakInject/Tweaks/DynamicLibraries/"
+#define tl_safe_mode_dir         "/Library/TweakInject/SafeMode/"
+#define tl_safe_mode_dylib_path  tl_safe_mode_dir "libsafeMode.dylib"
+#define tl_safe_mode_pill_path   tl_safe_mode_dir "libsafeModePill.dylib"
+// Persistent, not /var/run: that is cleared by the userspace reboot Safe Mode
+// uses to take effect. Mirrors /Library/TweakInject/.disabled.
+#define tl_safe_mode_marker      tl_safe_mode_dir ".safemode"
+#define tl_deny_list_path        "/Library/TweakInject/Config/denyInjectionList.plist"
+#define tl_per_proc_tweaks_path  "/Library/TweakInject/Config/perProcessTweaks.plist"
 
 /// Safe, deadlock-free file logging that avoids os_log / logd IPC deadlocks.
 static void tl_safe_log(const char* fmt, ...) {
@@ -32,68 +50,52 @@ static void tl_safe_log(const char* fmt, ...) {
     char body[1024];
     va_list args;
     va_start(args, fmt);
-    int bodyLen = vsnprintf(body, sizeof(body) - 2, fmt, args);
+    int body_len = vsnprintf(body, sizeof(body) - 2, fmt, args);
     va_end(args);
 
-    if (bodyLen <= 0) return;
+    if (body_len <= 0) return;
 
-    if (body[bodyLen - 1] != '\n') {
-        body[bodyLen] = '\n';
-        body[bodyLen + 1] = '\0';
-        bodyLen++;
+    if (body[body_len - 1] != '\n') {
+        body[body_len] = '\n';
+        body[body_len + 1] = '\0';
+        body_len++;
     }
 
     time_t now = time(NULL);
     struct tm tm_buf;
     localtime_r(&now, &tm_buf);
-    char timeStr[32];
-    strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &tm_buf);
+    char time_str[32];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm_buf);
 
     char line[1280];
-    int lineLen = snprintf(line, sizeof(line), "[%s] [%s:%d] %s", timeStr, prog ? prog : "unknown", getpid(), body);
-    if (lineLen <= 0) return;
+    int line_len = snprintf(line, sizeof(line), "[%s] [%s:%d] %s", time_str, prog ? prog : "unknown", getpid(), body);
+    if (line_len <= 0) return;
 
-    int fd = open(TWEAKINJECT_LOG_PATH, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK | O_CLOEXEC, 0666);
+    int fd = open(tl_log_path, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK | O_CLOEXEC, 0666);
     if (fd < 0) {
-        fd = open(TWEAKINJECT_LOG_FALLBACK, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK | O_CLOEXEC, 0666);
+        fd = open(tl_log_fallback, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK | O_CLOEXEC, 0666);
     }
     if (fd >= 0) {
-        write(fd, line, (size_t)lineLen);
+        write(fd, line, (size_t)line_len);
         close(fd);
     }
 
     // Touch active marker
-    int marker = open(TWEAKLOADER_ACTIVE_PATH, O_WRONLY | O_CREAT | O_TRUNC | O_NONBLOCK | O_CLOEXEC, 0666);
+    int marker = open(tl_active_path, O_WRONLY | O_CREAT | O_TRUNC | O_NONBLOCK | O_CLOEXEC, 0666);
     if (marker >= 0) {
         char hb[64];
-        int hbLen = snprintf(hb, sizeof(hb), "%ld %d\n", (long)now, getpid());
-        if (hbLen > 0) write(marker, hb, (size_t)hbLen);
+        int hb_len = snprintf(hb, sizeof(hb), "%ld %d\n", (long)now, getpid());
+        if (hb_len > 0) write(marker, hb, (size_t)hb_len);
         close(marker);
     }
 }
 
 #define TL_LOG(fmt, ...) tl_safe_log(fmt, ##__VA_ARGS__)
 
-#include <sys/sysctl.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <strings.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdbool.h>
-
-// MARK: - Paths & Constants
-#define twkPath               "/Library/TweakInject/DynamicLibraries/"
-#define safeModePath          "/Library/TweakInject/SafeMode/"
-#define safeModeDylibPath     "/Library/TweakInject/libsafeMode.dylib"
-#define denyListPath          "/Library/TweakInject/denyInjectionList.plist"
-#define perProcessTweaksPath  "/Library/TweakInject/perProcessTweaks.plist"
-
 // MARK: - Helper Functions
 
 /// Checks if a CFArray of strings contains a given needle string.
-static int string_array_contains(CFArrayRef array, const char* needle, int substring, int caseInsensitive) {
+static int tl_string_array_contains(CFArrayRef array, const char* needle, int substring, int case_insensitive) {
     if (!array || CFGetTypeID(array) != CFArrayGetTypeID() || !needle) {
         return 0;
     }
@@ -111,11 +113,11 @@ static int string_array_contains(CFArrayRef array, const char* needle, int subst
         }
 
         if (substring) {
-            if (caseInsensitive ? (strcasestr(needle, buf) != NULL) : (strstr(needle, buf) != NULL)) {
+            if (case_insensitive ? (strcasestr(needle, buf) != NULL) : (strstr(needle, buf) != NULL)) {
                 return 1;
             }
         } else {
-            if (caseInsensitive ? (strcasecmp(needle, buf) == 0) : (strcmp(needle, buf) == 0)) {
+            if (case_insensitive ? (strcasecmp(needle, buf) == 0) : (strcmp(needle, buf) == 0)) {
                 return 1;
             }
         }
@@ -124,8 +126,8 @@ static int string_array_contains(CFArrayRef array, const char* needle, int subst
 }
 
 /// Safely reads and parses a Property List (.plist) file from disk with a size sanity check.
-static CFPropertyListRef read_plist_file(const char* path) {
-    int fd = open(path, O_RDONLY);
+static CFPropertyListRef tl_read_plist_file(const char* file_path) {
+    int fd = open(file_path, O_RDONLY);
     if (fd < 0) {
         return NULL;
     }
@@ -167,18 +169,18 @@ static CFPropertyListRef read_plist_file(const char* path) {
 
 // MARK: - Per-Process Rule Lookup
 
-/// Looks up process rules in perProcessTweaks.plist matching in priority: execPath, mainBundleId, procName.
-static CFDictionaryRef find_process_rule_entry(CFDictionaryRef dict, const char* procName, const char* execPath, CFStringRef mainBundleId) {
+/// Looks up process rules in perProcessTweaks.plist matching in priority: exec_path, main_bundle_id, proc_name.
+static CFDictionaryRef tl_find_process_rule_entry(CFDictionaryRef dict, const char* proc_name, const char* exec_path, CFStringRef main_bundle_id) {
     if (!dict || CFGetTypeID(dict) != CFDictionaryGetTypeID()) {
         return NULL;
     }
 
     // 1. Direct match with full executable path
-    if (execPath && execPath[0] != '\0') {
-        CFStringRef cfExec = CFStringCreateWithCString(kCFAllocatorDefault, execPath, kCFStringEncodingUTF8);
-        if (cfExec) {
-            CFTypeRef val = CFDictionaryGetValue(dict, cfExec);
-            CFRelease(cfExec);
+    if (exec_path && exec_path[0] != '\0') {
+        CFStringRef cf_exec = CFStringCreateWithCString(kCFAllocatorDefault, exec_path, kCFStringEncodingUTF8);
+        if (cf_exec) {
+            CFTypeRef val = CFDictionaryGetValue(dict, cf_exec);
+            CFRelease(cf_exec);
             if (val && CFGetTypeID(val) == CFDictionaryGetTypeID()) {
                 return (CFDictionaryRef)val;
             }
@@ -186,19 +188,19 @@ static CFDictionaryRef find_process_rule_entry(CFDictionaryRef dict, const char*
     }
 
     // 2. Direct match with main bundle identifier
-    if (mainBundleId) {
-        CFTypeRef val = CFDictionaryGetValue(dict, mainBundleId);
+    if (main_bundle_id) {
+        CFTypeRef val = CFDictionaryGetValue(dict, main_bundle_id);
         if (val && CFGetTypeID(val) == CFDictionaryGetTypeID()) {
             return (CFDictionaryRef)val;
         }
     }
 
     // 3. Direct match with process base name
-    if (procName && procName[0] != '\0') {
-        CFStringRef cfProc = CFStringCreateWithCString(kCFAllocatorDefault, procName, kCFStringEncodingUTF8);
-        if (cfProc) {
-            CFTypeRef val = CFDictionaryGetValue(dict, cfProc);
-            CFRelease(cfProc);
+    if (proc_name && proc_name[0] != '\0') {
+        CFStringRef cf_proc = CFStringCreateWithCString(kCFAllocatorDefault, proc_name, kCFStringEncodingUTF8);
+        if (cf_proc) {
+            CFTypeRef val = CFDictionaryGetValue(dict, cf_proc);
+            CFRelease(cf_proc);
             if (val && CFGetTypeID(val) == CFDictionaryGetTypeID()) {
                 return (CFDictionaryRef)val;
             }
@@ -208,75 +210,21 @@ static CFDictionaryRef find_process_rule_entry(CFDictionaryRef dict, const char*
     return NULL;
 }
 
-/// Checks if injection is prohibited for this process globally.
-/// Two separate mechanisms answer "should this process be injected at all", and
-/// they are deliberately not merged:
-///
-///   denyInjectionList.plist  ships with the loader and is a SAFETY list. logd is
-///                            on it because logging from a constructor there wedges
-///                            the machine. It is not a user preference and nothing
-///                            in a UI should be able to clear it.
-///   perProcessTweaks.plist   is USER state, written by whatever front-end manages
-///                            tweaks, and says "I do not want injection in this
-///                            process right now".
-///
-/// Same effect, different owner and lifetime — collapsing them would mean a user
-/// action could remove a protection that exists to keep the system bootable.
-static int is_injection_denied_for_process(const char* procName, const char* execPath, CFStringRef mainBundleId) {
-    // 1. Safety list, shipped with the loader.
-    CFPropertyListRef denyPlist = read_plist_file(denyListPath);
-    if (denyPlist) {
-        int denied = 0;
-        CFTypeID type = CFGetTypeID(denyPlist);
 
-        if (type == CFArrayGetTypeID()) {
-            denied = string_array_contains((CFArrayRef)denyPlist, procName, 0, 0);
-        } else if (type == CFDictionaryGetTypeID()) {
-            CFDictionaryRef dict = (CFDictionaryRef)denyPlist;
-            denied = string_array_contains((CFArrayRef)CFDictionaryGetValue(dict, CFSTR("Processes")), procName, 0, 0);
-            if (!denied && execPath) {
-                denied = string_array_contains((CFArrayRef)CFDictionaryGetValue(dict, CFSTR("PathContains")), execPath, 1, 0);
-            }
-        }
-        CFRelease(denyPlist);
-        if (denied) {
-            return 1;
-        }
-    }
-
-    // 2. User preference, per process.
-    CFPropertyListRef perProcPlist = read_plist_file(perProcessTweaksPath);
-    if (perProcPlist) {
-        if (CFGetTypeID(perProcPlist) == CFDictionaryGetTypeID()) {
-            CFDictionaryRef dict = (CFDictionaryRef)perProcPlist;
-            CFDictionaryRef procEntry = find_process_rule_entry(dict, procName, execPath, mainBundleId);
-            if (procEntry) {
-                CFBooleanRef disabledVal = (CFBooleanRef)CFDictionaryGetValue(procEntry, CFSTR("TweakInjectionDisabled"));
-                if (disabledVal && CFGetTypeID(disabledVal) == CFBooleanGetTypeID() && CFBooleanGetValue(disabledVal)) {
-                    CFRelease(perProcPlist);
-                    return 1;
-                }
-            }
-        }
-        CFRelease(perProcPlist);
-    }
-
-    return 0;
-}
 
 /// Checks if a specific tweak is disabled for this process in perProcessTweaks.plist.
-static int is_tweak_disabled_for_process(const char* tweakBaseName, const char* procName, const char* execPath, CFStringRef mainBundleId, CFPropertyListRef perProcPlist) {
-    if (!perProcPlist || !tweakBaseName || CFGetTypeID(perProcPlist) != CFDictionaryGetTypeID()) {
+static int tl_is_tweak_disabled_for_process(const char* tweak_base_name, const char* proc_name, const char* exec_path, CFStringRef main_bundle_id, CFPropertyListRef per_proc_plist) {
+    if (!per_proc_plist || !tweak_base_name || CFGetTypeID(per_proc_plist) != CFDictionaryGetTypeID()) {
         return 0;
     }
 
-    CFDictionaryRef dict = (CFDictionaryRef)perProcPlist;
-    CFDictionaryRef procEntry = find_process_rule_entry(dict, procName, execPath, mainBundleId);
+    CFDictionaryRef dict = (CFDictionaryRef)per_proc_plist;
+    CFDictionaryRef proc_entry = tl_find_process_rule_entry(dict, proc_name, exec_path, main_bundle_id);
 
-    if (procEntry) {
-        CFArrayRef disabledTweaks = (CFArrayRef)CFDictionaryGetValue(procEntry, CFSTR("DisabledTweaks"));
-        if (disabledTweaks && CFGetTypeID(disabledTweaks) == CFArrayGetTypeID()) {
-            return string_array_contains(disabledTweaks, tweakBaseName, 0, 1);
+    if (proc_entry) {
+        CFArrayRef disabled_tweaks = (CFArrayRef)CFDictionaryGetValue(proc_entry, CFSTR("DisabledTweaks"));
+        if (disabled_tweaks && CFGetTypeID(disabled_tweaks) == CFArrayGetTypeID()) {
+            return tl_string_array_contains(disabled_tweaks, tweak_base_name, 0, 1);
         }
     }
 
@@ -286,225 +234,296 @@ static int is_tweak_disabled_for_process(const char* tweakBaseName, const char* 
 // MARK: - Safe Boot Detection
 
 /// Checks if macOS booted into Safe Mode via kern.bootargs.
-int is_booted_in_safe_mode(void) {
+static int tl_is_booted_in_safe_mode(void) {
     size_t size = 0;
     if (sysctlbyname("kern.bootargs", NULL, &size, NULL, 0) != 0 || size == 0)
         return 0;
-    
-    char* bootargs = malloc(size);
-    if (!bootargs)
+
+    char* boot_args = malloc(size);
+    if (!boot_args)
         return 0;
-    
-    if (sysctlbyname("kern.bootargs", bootargs, &size, NULL, 0) != 0) {
-        free(bootargs);
+
+    if (sysctlbyname("kern.bootargs", boot_args, &size, NULL, 0) != 0) {
+        free(boot_args);
         return 0;
     }
-    
-    int is_safe = (strstr(bootargs, "-x") != NULL);
-    free(bootargs);
+
+    int is_safe = (strstr(boot_args, "-x") != NULL);
+    free(boot_args);
     return is_safe;
 }
 
 // MARK: - Filter Plist Evaluation
 
 /// Evaluates a tweak's Filter dictionary against the current process.
-static bool is_injection_allowed_for_process_by_filter(
+static bool tl_is_injection_allowed_for_process_by_filter(
     CFDictionaryRef filters,
-    const char* procName,
-    const char* execPath,
-    CFBundleRef mainBundle,
-    const char* bundlePath,
-    CFStringRef mainBundleId
+    const char* proc_name,
+    const char* exec_path,
+    CFBundleRef main_bundle,
+    const char* bundle_path,
+    CFStringRef main_bundle_id
 ) {
     if (!filters || CFGetTypeID(filters) != CFDictionaryGetTypeID()) {
         return false;
     }
 
     // 1. ExcludeBundles (Hard veto: if matched, reject tweak immediately)
-    CFArrayRef excludeBundles = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("ExcludeBundles"));
-    if (excludeBundles && CFGetTypeID(excludeBundles) == CFArrayGetTypeID()) {
-        CFIndex count = CFArrayGetCount(excludeBundles);
+    CFArrayRef exclude_bundles = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("ExcludeBundles"));
+    if (exclude_bundles && CFGetTypeID(exclude_bundles) == CFArrayGetTypeID()) {
+        CFIndex count = CFArrayGetCount(exclude_bundles);
         for (CFIndex i = 0; i < count; i++) {
-            CFTypeRef item = CFArrayGetValueAtIndex(excludeBundles, i);
+            CFTypeRef item = CFArrayGetValueAtIndex(exclude_bundles, i);
             if (!item || CFGetTypeID(item) != CFStringGetTypeID()) continue;
-            CFStringRef exclId = (CFStringRef)item;
+            CFStringRef excl_id = (CFStringRef)item;
 
-            if (CFBundleGetBundleWithIdentifier(exclId) != NULL) {
+            if (CFBundleGetBundleWithIdentifier(excl_id) != NULL) {
                 return false;
             }
-            if (mainBundleId && CFStringCompare(mainBundleId, exclId, kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
+            if (main_bundle_id && CFStringCompare(main_bundle_id, excl_id, kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
                 return false;
             }
         }
     }
 
     // 2. Type Gate ("All", "App", "Binary" - Hard veto on mismatch)
-    CFStringRef typeFilter = (CFStringRef)CFDictionaryGetValue(filters, CFSTR("Type"));
-    bool isAppProcess = false;
-    if ((bundlePath[0] != '\0' && strstr(bundlePath, ".app") != NULL) ||
-        (execPath && strstr(execPath, ".app/") != NULL)) {
-        isAppProcess = true;
+    CFStringRef type_filter = (CFStringRef)CFDictionaryGetValue(filters, CFSTR("Type"));
+    bool is_app_proc = false;
+    if ((bundle_path[0] != '\0' && strstr(bundle_path, ".app") != NULL) ||
+        (exec_path && strstr(exec_path, ".app/") != NULL)) {
+        is_app_proc = true;
     }
 
-    if (typeFilter && CFGetTypeID(typeFilter) == CFStringGetTypeID()) {
-        if (CFStringCompare(typeFilter, CFSTR("App"), kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
-            if (!isAppProcess) return false;
-        } else if (CFStringCompare(typeFilter, CFSTR("Binary"), kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
-            if (isAppProcess) return false;
+    if (type_filter && CFGetTypeID(type_filter) == CFStringGetTypeID()) {
+        if (CFStringCompare(type_filter, CFSTR("App"), kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
+            if (!is_app_proc) return false;
+        } else if (CFStringCompare(type_filter, CFSTR("Binary"), kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
+            if (is_app_proc) return false;
         }
     }
 
     // 3. Privilege Gate ("Any" | "Root" | "User" - hard veto on mismatch)
-    //
-    // One of this loader's extensions to the iOS filter schema, alongside
-    // ExcludeBundles and Type. Absent or "Any" is a no-op, so a filter written for
-    // the original schema keeps its behaviour exactly.
-    //
-    // It is a containment control: a tweak that cannot load into a root process
-    // cannot gain root, which bounds what a package can reach if it turns out to be
-    // hostile or simply broken. euid is read here, at load time; a process that
-    // drops privileges afterwards is not re-evaluated, matching the other gates.
-    CFStringRef privFilter = (CFStringRef)CFDictionaryGetValue(filters, CFSTR("Privilege"));
-    if (privFilter && CFGetTypeID(privFilter) == CFStringGetTypeID()) {
+    CFStringRef priv_filter = (CFStringRef)CFDictionaryGetValue(filters, CFSTR("Privilege"));
+    if (priv_filter && CFGetTypeID(priv_filter) == CFStringGetTypeID()) {
         uid_t euid = geteuid();
-        if (CFStringCompare(privFilter, CFSTR("Root"), kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
+        if (CFStringCompare(priv_filter, CFSTR("Root"), kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
             if (euid != 0) return false;
-        } else if (CFStringCompare(privFilter, CFSTR("User"), kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
+        } else if (CFStringCompare(priv_filter, CFSTR("User"), kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
             if (euid == 0) return false;
         }
     }
 
     // 4. CoreFoundationVersion Gate ([min] or [min, max])
-    CFArrayRef cfVersionFilter = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("CoreFoundationVersion"));
-    if (cfVersionFilter && CFGetTypeID(cfVersionFilter) == CFArrayGetTypeID()) {
-        CFIndex count = CFArrayGetCount(cfVersionFilter);
+    CFArrayRef cf_version_filter = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("CoreFoundationVersion"));
+    if (cf_version_filter && CFGetTypeID(cf_version_filter) == CFArrayGetTypeID()) {
+        CFIndex count = CFArrayGetCount(cf_version_filter);
         if (count >= 1) {
-            CFTypeRef minValRef = CFArrayGetValueAtIndex(cfVersionFilter, 0);
-            if (minValRef && CFGetTypeID(minValRef) == CFNumberGetTypeID()) {
-                double minVal = 0;
-                CFNumberGetValue((CFNumberRef)minValRef, kCFNumberDoubleType, &minVal);
-                if (kCFCoreFoundationVersionNumber < minVal) {
+            CFTypeRef min_val_ref = CFArrayGetValueAtIndex(cf_version_filter, 0);
+            if (min_val_ref && CFGetTypeID(min_val_ref) == CFNumberGetTypeID()) {
+                double min_val = 0;
+                CFNumberGetValue((CFNumberRef)min_val_ref, kCFNumberDoubleType, &min_val);
+                if (kCFCoreFoundationVersionNumber < min_val) {
                     return false;
                 }
             }
         }
         if (count >= 2) {
-            CFTypeRef maxValRef = CFArrayGetValueAtIndex(cfVersionFilter, 1);
-            if (maxValRef && CFGetTypeID(maxValRef) == CFNumberGetTypeID()) {
-                double maxVal = 0;
-                CFNumberGetValue((CFNumberRef)maxValRef, kCFNumberDoubleType, &maxVal);
-                if (kCFCoreFoundationVersionNumber >= maxVal) {
+            CFTypeRef max_val_ref = CFArrayGetValueAtIndex(cf_version_filter, 1);
+            if (max_val_ref && CFGetTypeID(max_val_ref) == CFNumberGetTypeID()) {
+                double max_val = 0;
+                CFNumberGetValue((CFNumberRef)max_val_ref, kCFNumberDoubleType, &max_val);
+                if (kCFCoreFoundationVersionNumber >= max_val) {
                     return false;
                 }
             }
         }
     }
 
-    // 4. Criteria Matching: Bundles, Classes, Executables (OR semantics)
-    CFArrayRef bundlesFilter = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("Bundles"));
-    if (bundlesFilter && CFGetTypeID(bundlesFilter) == CFArrayGetTypeID()) {
-        CFIndex count = CFArrayGetCount(bundlesFilter);
+    // 5. Criteria Matching: Bundles, Classes, Executables (OR semantics)
+    CFArrayRef bundles_filter = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("Bundles"));
+    if (bundles_filter && CFGetTypeID(bundles_filter) == CFArrayGetTypeID()) {
+        CFIndex count = CFArrayGetCount(bundles_filter);
         for (CFIndex i = 0; i < count; i++) {
-            CFTypeRef item = CFArrayGetValueAtIndex(bundlesFilter, i);
+            CFTypeRef item = CFArrayGetValueAtIndex(bundles_filter, i);
             if (!item || CFGetTypeID(item) != CFStringGetTypeID()) continue;
-            CFStringRef reqId = (CFStringRef)item;
+            CFStringRef req_id = (CFStringRef)item;
 
-            if (CFBundleGetBundleWithIdentifier(reqId) != NULL) {
+            if (CFBundleGetBundleWithIdentifier(req_id) != NULL) {
                 return true;
             }
-            if (mainBundleId && CFStringCompare(mainBundleId, reqId, kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
+            if (main_bundle_id && CFStringCompare(main_bundle_id, req_id, kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
                 return true;
             }
         }
     }
 
-    CFArrayRef classesFilter = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("Classes"));
-    if (classesFilter && CFGetTypeID(classesFilter) == CFArrayGetTypeID()) {
-        CFIndex count = CFArrayGetCount(classesFilter);
+    CFArrayRef classes_filter = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("Classes"));
+    if (classes_filter && CFGetTypeID(classes_filter) == CFArrayGetTypeID()) {
+        CFIndex count = CFArrayGetCount(classes_filter);
         for (CFIndex i = 0; i < count; i++) {
-            CFTypeRef item = CFArrayGetValueAtIndex(classesFilter, i);
+            CFTypeRef item = CFArrayGetValueAtIndex(classes_filter, i);
             if (!item || CFGetTypeID(item) != CFStringGetTypeID()) continue;
-            char classNameBuf[256];
-            if (CFStringGetCString((CFStringRef)item, classNameBuf, sizeof(classNameBuf), kCFStringEncodingUTF8)) {
-                if (objc_getClass(classNameBuf) != nil) {
+            char class_name_buf[256];
+            if (CFStringGetCString((CFStringRef)item, class_name_buf, sizeof(class_name_buf), kCFStringEncodingUTF8)) {
+                if (objc_getClass(class_name_buf) != nil) {
                     return true;
                 }
             }
         }
     }
 
-    CFArrayRef executablesFilter = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("Executables"));
-    if (executablesFilter && CFGetTypeID(executablesFilter) == CFArrayGetTypeID()) {
-        CFIndex count = CFArrayGetCount(executablesFilter);
-        const char* execBaseName = (execPath ? strrchr(execPath, '/') : NULL);
-        execBaseName = execBaseName ? execBaseName + 1 : execPath;
+    CFArrayRef executables_filter = (CFArrayRef)CFDictionaryGetValue(filters, CFSTR("Executables"));
+    if (executables_filter && CFGetTypeID(executables_filter) == CFArrayGetTypeID()) {
+        CFIndex count = CFArrayGetCount(executables_filter);
+        const char* exec_base_name = (exec_path ? strrchr(exec_path, '/') : NULL);
+        exec_base_name = exec_base_name ? exec_base_name + 1 : exec_path;
 
         for (CFIndex i = 0; i < count; i++) {
-            CFTypeRef item = CFArrayGetValueAtIndex(executablesFilter, i);
+            CFTypeRef item = CFArrayGetValueAtIndex(executables_filter, i);
             if (!item || CFGetTypeID(item) != CFStringGetTypeID()) continue;
-            char execNameBuf[256];
-            if (CFStringGetCString((CFStringRef)item, execNameBuf, sizeof(execNameBuf), kCFStringEncodingUTF8)) {
-                if (procName && strcasecmp(procName, execNameBuf) == 0) {
+            char exec_name_buf[256];
+            if (CFStringGetCString((CFStringRef)item, exec_name_buf, sizeof(exec_name_buf), kCFStringEncodingUTF8)) {
+                if (proc_name && strcasecmp(proc_name, exec_name_buf) == 0) {
                     return true;
                 }
-                if (execBaseName && strcasecmp(execBaseName, execNameBuf) == 0) {
+                if (exec_base_name && strcasecmp(exec_base_name, exec_name_buf) == 0) {
                     return true;
                 }
             }
         }
     }
 
-    // A filter with no criteria arrays matches every process that got past the gates
-    // above -- but only if it actually declared a gate. This is a deliberate
-    // divergence from the iOS loaders, where a criteria-less filter matches nothing
-    // and "everywhere" is spelled by naming a universally linked bundle such as
-    // com.apple.foundation. Here Type/Privilege say it directly.
-    //
-    // An empty filter still matches nothing: declaring no criteria AND no gate is
-    // not a request to inject everywhere, it is an incomplete filter.
-    bool has_any_criteria = (bundlesFilter && CFGetTypeID(bundlesFilter) == CFArrayGetTypeID() && CFArrayGetCount(bundlesFilter) > 0) ||
-                            (classesFilter && CFGetTypeID(classesFilter) == CFArrayGetTypeID() && CFArrayGetCount(classesFilter) > 0) ||
-                            (executablesFilter && CFGetTypeID(executablesFilter) == CFArrayGetTypeID() && CFArrayGetCount(executablesFilter) > 0);
+    bool has_any_criteria = (bundles_filter && CFGetTypeID(bundles_filter) == CFArrayGetTypeID() && CFArrayGetCount(bundles_filter) > 0) ||
+                            (classes_filter && CFGetTypeID(classes_filter) == CFArrayGetTypeID() && CFArrayGetCount(classes_filter) > 0) ||
+                            (executables_filter && CFGetTypeID(executables_filter) == CFArrayGetTypeID() && CFArrayGetCount(executables_filter) > 0);
 
-    if (!has_any_criteria && (typeFilter != NULL || privFilter != NULL)) {
+    if (!has_any_criteria && (type_filter != NULL || priv_filter != NULL)) {
         return true;
     }
 
     return false;
 }
 
-static int filter_plist_files(const struct dirent* entry) {
+static int tl_filter_bundle_files(const struct dirent* entry) {
     if (!entry || entry->d_name[0] == '.') {
         return 0;
     }
     size_t len = strlen(entry->d_name);
-    return (len > 6 && strcmp(entry->d_name + len - 6, ".plist") == 0);
+    return (len > 7 && strcmp(entry->d_name + len - 7, ".bundle") == 0) ? 1 : 0;
 }
 
-int64_t (*_sandbox_extension_consume)(const char* token);
+static int tl_filter_plist_files(const struct dirent* entry) {
+    if (!entry || entry->d_name[0] == '.') {
+        return 0;
+    }
+    size_t len = strlen(entry->d_name);
+    return (len > 6 && strcmp(entry->d_name + len - 6, ".plist") == 0) ? 1 : 0;
+}
+
+/// Helper to find the dynamic library executable inside a .bundle directory
+static bool tl_find_bundle_executable(const char* bundle_path, char* out_exec_path, size_t out_size) {
+    char macos_dir[1024];
+    snprintf(macos_dir, sizeof(macos_dir), "%s/Contents/MacOS", bundle_path);
+
+    DIR* dir = opendir(macos_dir);
+    if (dir) {
+        struct dirent* ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+            snprintf(out_exec_path, out_size, "%s/%s", macos_dir, ent->d_name);
+            closedir(dir);
+            return true;
+        }
+        closedir(dir);
+    }
+
+    // Fallback: search direct dynamic library in bundle root
+    DIR* root_dir = opendir(bundle_path);
+    if (root_dir) {
+        struct dirent* ent;
+        while ((ent = readdir(root_dir)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+            size_t nlen = strlen(ent->d_name);
+            if (nlen > 6 && strcmp(ent->d_name + nlen - 6, ".dylib") == 0) {
+                snprintf(out_exec_path, out_size, "%s/%s", bundle_path, ent->d_name);
+                closedir(root_dir);
+                return true;
+            }
+        }
+        closedir(root_dir);
+    }
+    return false;
+}
+
+/// Helper to find and read filter plist inside or alongside a .bundle
+static CFPropertyListRef tl_read_bundle_filter(const char* bundle_path, const char* tweak_name) {
+    char path[1024];
+
+    // 1. Contents/Resources/Filter.plist
+    snprintf(path, sizeof(path), "%s/Contents/Resources/Filter.plist", bundle_path);
+    if (access(path, F_OK) == 0) {
+        CFPropertyListRef plist = tl_read_plist_file(path);
+        if (plist) return plist;
+    }
+
+    // 2. Contents/Filter.plist
+    snprintf(path, sizeof(path), "%s/Contents/Filter.plist", bundle_path);
+    if (access(path, F_OK) == 0) {
+        CFPropertyListRef plist = tl_read_plist_file(path);
+        if (plist) return plist;
+    }
+
+    // 3. Contents/Resources/<TweakName>.plist
+    snprintf(path, sizeof(path), "%s/Contents/Resources/%s.plist", bundle_path, tweak_name);
+    if (access(path, F_OK) == 0) {
+        CFPropertyListRef plist = tl_read_plist_file(path);
+        if (plist) return plist;
+    }
+
+    // 4. Outside <TweakName>.plist
+    snprintf(path, sizeof(path), "%s%s.plist", tl_bundles_path, tweak_name);
+    if (access(path, F_OK) == 0) {
+        CFPropertyListRef plist = tl_read_plist_file(path);
+        if (plist) return plist;
+    }
+
+    // 5. Contents/Info.plist
+    snprintf(path, sizeof(path), "%s/Contents/Info.plist", bundle_path);
+    if (access(path, F_OK) == 0) {
+        CFPropertyListRef plist = tl_read_plist_file(path);
+        if (plist) return plist;
+    }
+
+    return NULL;
+}
+
+static int64_t (*_sandbox_extension_consume)(const char* token) = NULL;
 
 // MARK: - TweakLoader Entrypoint (Constructor)
 
-__attribute__((constructor)) static void init_tweak_loader(void) {
+__attribute__((constructor)) static void tl_init_tweak_loader(void) {
+    // Unset DYLD_INSERT_LIBRARIES so any child processes spawned do not unintentionally inherit injection
+    unsetenv("DYLD_INSERT_LIBRARIES");
 
     // 1. Consume App Sandbox extensions FIRST so subsequent access() checks succeed in sandboxed apps (Notes, Mail, etc.)
-    void* libSystemSandboxHandle = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_NOW);
-    if (libSystemSandboxHandle) {
-        _sandbox_extension_consume = dlsym(libSystemSandboxHandle, "sandbox_extension_consume");
+    void* lib_sandbox_handle = dlopen("/usr/lib/system/libsystem_sandbox.dylib", RTLD_NOW);
+    if (lib_sandbox_handle) {
+        _sandbox_extension_consume = dlsym(lib_sandbox_handle, "sandbox_extension_consume");
         if (_sandbox_extension_consume) {
-            char* sandbox_token = getenv("TL_SANDBOX_TOKEN"); if (!sandbox_token) sandbox_token = getenv("SANDBOX_TOKEN");
-            if (sandbox_token) {
-                int64_t handle = _sandbox_extension_consume(sandbox_token);
-                if (handle > 0) {
-                    TL_LOG("[TweakLoader] Read sandbox extension consumed successfully");
-                }
+            // TL_SANDBOX_TOKEN_0..N-1, one per entry in launchd_hooks' grant
+            // tables. Consume until the first gap rather than a fixed pair, so
+            // adding a grant there needs no change here.
+            int consumed = 0;
+            for (size_t i = 0; ; i++) {
+                char name[64];
+                snprintf(name, sizeof(name), "TL_SANDBOX_TOKEN_%zu", i);
+                char *token = getenv(name);
+                if (!token) break;
+                if (_sandbox_extension_consume(token) > 0) consumed++;
             }
-            char* sandbox_token_rw = getenv("TL_SANDBOX_TOKEN_RW");
-            if (sandbox_token_rw) {
-                int64_t handle_rw = _sandbox_extension_consume(sandbox_token_rw);
-                if (handle_rw > 0) {
-                    TL_LOG("[TweakLoader] Read-write logs sandbox extension consumed successfully");
-                }
+
+            if (consumed > 0) {
+                TL_LOG("[TweakLoader] Consumed %d sandbox extension(s)", consumed);
             }
         }
     }
@@ -521,142 +540,212 @@ __attribute__((constructor)) static void init_tweak_loader(void) {
     }
 
     // 3. Identify current process
-    char procName[256] = {0};
-    proc_name(getpid(), procName, sizeof(procName));
+    char process_name[256] = {0};
+    proc_name(getpid(), process_name, sizeof(process_name));
 
-    char execPath[PROC_PIDPATHINFO_MAXSIZE] = {0};
-    if (proc_pidpath(getpid(), execPath, sizeof(execPath)) <= 0) {
-        execPath[0] = '\0';
+    char exec_path[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    if (proc_pidpath(getpid(), exec_path, sizeof(exec_path)) <= 0) {
+        exec_path[0] = '\0';
     }
 
-    CFBundleRef mainBundle = CFBundleGetMainBundle();
-    CFStringRef mainBundleId = mainBundle ? CFBundleGetIdentifier(mainBundle) : NULL;
-    char bundlePath[1024] = {0};
-    if (mainBundle) {
-        CFURLRef bundleUrl = CFBundleCopyBundleURL(mainBundle);
-        if (bundleUrl) {
-            CFStringRef bundleUrlString = CFURLCopyPath(bundleUrl);
-            if (bundleUrlString) {
-                CFStringGetCString(bundleUrlString, bundlePath, sizeof(bundlePath), kCFStringEncodingUTF8);
-                CFRelease(bundleUrlString);
+    CFBundleRef main_bundle = CFBundleGetMainBundle();
+    CFStringRef main_bundle_id = main_bundle ? CFBundleGetIdentifier(main_bundle) : NULL;
+    char bundle_path[1024] = {0};
+    if (main_bundle) {
+        CFURLRef bundle_url = CFBundleCopyBundleURL(main_bundle);
+        if (bundle_url) {
+            CFStringRef bundle_url_string = CFURLCopyPath(bundle_url);
+            if (bundle_url_string) {
+                CFStringGetCString(bundle_url_string, bundle_path, sizeof(bundle_path), kCFStringEncodingUTF8);
+                CFRelease(bundle_url_string);
             }
-            CFRelease(bundleUrl);
+            CFRelease(bundle_url);
         }
     }
 
-    TL_LOG("[TweakLoader] Active in %s (pid %d)", procName[0] ? procName : "process", getpid());
-
-    // 3. Denylist check
-    if (is_injection_denied_for_process(procName, execPath, mainBundleId)) {
-        TL_LOG("[TweakLoader] %s is denied, skipping injection", procName);
-        return;
-    }
+    TL_LOG("[TweakLoader] Active in %s (pid %d)", process_name[0] ? process_name : "process", getpid());
 
     // 4. SafeMode check
-    if (strcmp(procName, "Dock") == 0 || strcmp(procName, "WallpaperVideoExtension") == 0 ||
-        strcmp(procName, "WallpaperImageExtension") == 0 || strcmp(procName, "Finder") == 0 ||
-        strcmp(procName, "WindowServer") == 0 || strcmp(procName, "Spotlight") == 0) {
-        dlopen(safeModeDylibPath, RTLD_NOW);
+    if (strcmp(process_name, "Dock") == 0 || strcmp(process_name, "WallpaperVideoExtension") == 0 ||
+        strcmp(process_name, "WallpaperImageExtension") == 0 || strcmp(process_name, "Finder") == 0 ||
+        strcmp(process_name, "WindowServer") == 0 || strcmp(process_name, "Spotlight") == 0) {
+        dlopen(tl_safe_mode_dylib_path, RTLD_NOW);
     }
 
-    if (is_booted_in_safe_mode()) {
+    if (tl_is_booted_in_safe_mode()) {
         TL_LOG("[TweakLoader] SafeBoot enabled, skipping injection");
         return;
     }
 
-    int safe_mode_found = (access("/var/run/tweakinject.safemode", F_OK) == 0);
-    if (!safe_mode_found) {
-        DIR* smDir = opendir(safeModePath);
-        if (smDir) {
-            struct dirent* smEntry;
-            while ((smEntry = readdir(smDir)) != NULL) {
-                size_t nlen = strlen(smEntry->d_name);
-                if (nlen > 4 && strcmp(smEntry->d_name + nlen - 4, ".txt") == 0) {
-                    safe_mode_found = 1;
+    // The root-owned marker, and only that. This used to also count any *.txt
+    // in the Safe Mode directory, which is why that directory now holds the two
+    // Safe Mode dylibs and nothing else.
+    //
+    // Reaching here in Safe Mode at all means this process is one of the
+    // indicator hosts: the spawn hooks strip injection from everything else, so
+    // the loader is not even mapped into the rest of the machine.
+    if (access(tl_safe_mode_marker, F_OK) == 0) {
+        // ControlCenter only, matching safe_mode_indicator_hosts[] in the spawn
+        // hooks: these two must name the same process or the host gets the
+        // loader and never the pill, or loads the pill and duplicates the item.
+        if (strcmp(process_name, "ControlCenter") == 0) {
+            dlopen(tl_safe_mode_pill_path, RTLD_NOW);
+        }
+        TL_LOG("[TweakLoader] SafeMode active, handled indicator for %s, skipping regular tweaks", process_name);
+        return;
+    }
+
+    // 6. Scan and load tweaks in deterministic alphabetical order
+    CFPropertyListRef per_proc_plist = tl_read_plist_file(tl_per_proc_tweaks_path);
+    char processed_tweaks[256][256];
+    int processed_count = 0;
+
+    // Pass 1: Scan self-contained .bundle packages in tl_bundles_path
+    struct dirent** bundle_list = NULL;
+    int bundle_count = scandir(tl_bundles_path, &bundle_list, tl_filter_bundle_files, alphasort);
+    if (bundle_count > 0) {
+        for (int i = 0; i < bundle_count; i++) {
+            const char* entry_name = bundle_list[i]->d_name;
+            size_t name_len = strlen(entry_name);
+            char tweak_base_name[256] = {0};
+
+            if (name_len > 7 && strcmp(entry_name + name_len - 7, ".bundle") == 0) {
+                memcpy(tweak_base_name, entry_name, name_len - 7);
+                tweak_base_name[name_len - 7] = '\0';
+            } else {
+                snprintf(tweak_base_name, sizeof(tweak_base_name), "%s", entry_name);
+            }
+
+            if (processed_count < 256) {
+                snprintf(processed_tweaks[processed_count++], sizeof(processed_tweaks[0]), "%s", tweak_base_name);
+            }
+
+            // Check per-process disable
+            if (tl_is_tweak_disabled_for_process(tweak_base_name, process_name, exec_path, main_bundle_id, per_proc_plist)) {
+                free(bundle_list[i]);
+                continue;
+            }
+
+            char bundle_full_path[1024];
+            snprintf(bundle_full_path, sizeof(bundle_full_path), "%s%s", tl_bundles_path, entry_name);
+
+            char binary_full_path[1024] = {0};
+            if (!tl_find_bundle_executable(bundle_full_path, binary_full_path, sizeof(binary_full_path))) {
+                free(bundle_list[i]);
+                continue;
+            }
+
+            CFPropertyListRef plist = tl_read_bundle_filter(bundle_full_path, tweak_base_name);
+            if (!plist) {
+                free(bundle_list[i]);
+                continue;
+            }
+
+            if (CFGetTypeID(plist) == CFDictionaryGetTypeID()) {
+                CFDictionaryRef root_dict = (CFDictionaryRef)plist;
+                CFDictionaryRef filter_dict = (CFDictionaryRef)CFDictionaryGetValue(root_dict, CFSTR("Filter"));
+                if (!filter_dict || CFGetTypeID(filter_dict) != CFDictionaryGetTypeID()) {
+                    filter_dict = root_dict;
+                }
+
+                if (tl_is_injection_allowed_for_process_by_filter(filter_dict, process_name, exec_path, main_bundle, bundle_path, main_bundle_id)) {
+                    TL_LOG("[TweakLoader] Injecting bundle %s into %s (pid %d)", binary_full_path, process_name, getpid());
+                    void* handle = dlopen(binary_full_path, RTLD_NOW);
+                    if (handle) {
+                        TL_LOG("[TweakLoader] Injected %s successfully", binary_full_path);
+                    } else {
+                        const char* dl_err = dlerror();
+                        TL_LOG("[TweakLoader] dlopen failed for %s: %s", binary_full_path, dl_err ? dl_err : "unknown");
+                    }
+                }
+            }
+
+            CFRelease(plist);
+            free(bundle_list[i]);
+        }
+        free(bundle_list);
+    }
+
+    // Pass 2: Scan flat .dylib + .plist tweaks in tl_dylibs_path
+    struct dirent** dylib_list = NULL;
+    int dylib_count = scandir(tl_dylibs_path, &dylib_list, tl_filter_plist_files, alphasort);
+    if (dylib_count > 0) {
+        for (int i = 0; i < dylib_count; i++) {
+            const char* entry_name = dylib_list[i]->d_name;
+            size_t name_len = strlen(entry_name);
+            char tweak_base_name[256] = {0};
+
+            if (name_len > 6 && strcmp(entry_name + name_len - 6, ".plist") == 0) {
+                memcpy(tweak_base_name, entry_name, name_len - 6);
+                tweak_base_name[name_len - 6] = '\0';
+            } else {
+                snprintf(tweak_base_name, sizeof(tweak_base_name), "%s", entry_name);
+            }
+
+            // De-duplicate if already loaded via bundle
+            bool already_processed = false;
+            for (int p = 0; p < processed_count; p++) {
+                if (strcasecmp(processed_tweaks[p], tweak_base_name) == 0) {
+                    already_processed = true;
                     break;
                 }
             }
-            closedir(smDir);
-        }
-    }
-
-    if (safe_mode_found) {
-        if (strcmp(procName, "MenuBarAgent") == 0 || strcmp(procName, "Finder") == 0 || strcmp(procName, "Dock") == 0) {
-            dlopen("/Library/TweakInject/SafeMode/libsafeModePill.dylib", RTLD_NOW);
-        }
-        TL_LOG("[TweakLoader] SafeMode active, handled indicator for %s, skipping regular tweaks", procName);
-        return;
-    }
-
-    // 5. Scan and load tweaks in deterministic alphabetical order
-    struct dirent** namelist = NULL;
-    int count = scandir(twkPath, &namelist, filter_plist_files, alphasort);
-    if (count < 0) {
-        TL_LOG("[TweakLoader] Failed to scan %s", twkPath);
-        return;
-    }
-
-    CFPropertyListRef perProcPlist = read_plist_file(perProcessTweaksPath);
-
-    for (int i = 0; i < count; i++) {
-        char plistFullPath[1024];
-        snprintf(plistFullPath, sizeof(plistFullPath), "%s%s", twkPath, namelist[i]->d_name);
-
-        size_t nameLen = strlen(namelist[i]->d_name);
-        char tweakBaseName[512];
-        if (nameLen > 6 && nameLen - 6 < sizeof(tweakBaseName)) {
-            memcpy(tweakBaseName, namelist[i]->d_name, nameLen - 6);
-            tweakBaseName[nameLen - 6] = '\0';
-        } else {
-            snprintf(tweakBaseName, sizeof(tweakBaseName), "%s", namelist[i]->d_name);
-        }
-
-        // Check per-process disable
-        if (is_tweak_disabled_for_process(tweakBaseName, procName, execPath, mainBundleId, perProcPlist)) {
-            free(namelist[i]);
-            continue;
-        }
-
-        char dylibFullPath[1024];
-        snprintf(dylibFullPath, sizeof(dylibFullPath), "%s%s.dylib", twkPath, tweakBaseName);
-
-        struct stat dylibSt;
-        if (stat(dylibFullPath, &dylibSt) != 0) {
-            free(namelist[i]);
-            continue;
-        }
-
-        CFPropertyListRef plist = read_plist_file(plistFullPath);
-        if (!plist) {
-            free(namelist[i]);
-            continue;
-        }
-
-        if (CFGetTypeID(plist) == CFDictionaryGetTypeID()) {
-            CFDictionaryRef rootDict = (CFDictionaryRef)plist;
-            CFDictionaryRef filterDict = (CFDictionaryRef)CFDictionaryGetValue(rootDict, CFSTR("Filter"));
-            if (!filterDict || CFGetTypeID(filterDict) != CFDictionaryGetTypeID()) {
-                filterDict = rootDict;
+            if (already_processed) {
+                free(dylib_list[i]);
+                continue;
+            }
+            if (processed_count < 256) {
+                snprintf(processed_tweaks[processed_count++], sizeof(processed_tweaks[0]), "%s", tweak_base_name);
             }
 
-            if (is_injection_allowed_for_process_by_filter(filterDict, procName, execPath, mainBundle, bundlePath, mainBundleId)) {
-                TL_LOG("[TweakLoader] Injecting %s into %s (pid %d)", dylibFullPath, procName, getpid());
-                void* handle = dlopen(dylibFullPath, RTLD_NOW);
-                if (handle) {
-                    TL_LOG("[TweakLoader] Injected %s successfully", dylibFullPath);
-                } else {
-                    const char* dlErr = dlerror();
-                    TL_LOG("[TweakLoader] dlopen failed for %s: %s", dylibFullPath, dlErr ? dlErr : "unknown");
+            // Check per-process disable
+            if (tl_is_tweak_disabled_for_process(tweak_base_name, process_name, exec_path, main_bundle_id, per_proc_plist)) {
+                free(dylib_list[i]);
+                continue;
+            }
+
+            char binary_full_path[1024];
+            snprintf(binary_full_path, sizeof(binary_full_path), "%s%s.dylib", tl_dylibs_path, tweak_base_name);
+            struct stat dylib_st;
+            if (stat(binary_full_path, &dylib_st) != 0) {
+                free(dylib_list[i]);
+                continue;
+            }
+
+            char plist_full_path[1024];
+            snprintf(plist_full_path, sizeof(plist_full_path), "%s%s.plist", tl_dylibs_path, tweak_base_name);
+            CFPropertyListRef plist = tl_read_plist_file(plist_full_path);
+            if (!plist) {
+                free(dylib_list[i]);
+                continue;
+            }
+
+            if (CFGetTypeID(plist) == CFDictionaryGetTypeID()) {
+                CFDictionaryRef root_dict = (CFDictionaryRef)plist;
+                CFDictionaryRef filter_dict = (CFDictionaryRef)CFDictionaryGetValue(root_dict, CFSTR("Filter"));
+                if (!filter_dict || CFGetTypeID(filter_dict) != CFDictionaryGetTypeID()) {
+                    filter_dict = root_dict;
+                }
+
+                if (tl_is_injection_allowed_for_process_by_filter(filter_dict, process_name, exec_path, main_bundle, bundle_path, main_bundle_id)) {
+                    TL_LOG("[TweakLoader] Injecting dylib %s into %s (pid %d)", binary_full_path, process_name, getpid());
+                    void* handle = dlopen(binary_full_path, RTLD_NOW);
+                    if (handle) {
+                        TL_LOG("[TweakLoader] Injected %s successfully", binary_full_path);
+                    } else {
+                        const char* dl_err = dlerror();
+                        TL_LOG("[TweakLoader] dlopen failed for %s: %s", binary_full_path, dl_err ? dl_err : "unknown");
+                    }
                 }
             }
+
+            CFRelease(plist);
+            free(dylib_list[i]);
         }
-
-        CFRelease(plist);
-        free(namelist[i]);
+        free(dylib_list);
     }
 
-    if (perProcPlist) {
-        CFRelease(perProcPlist);
+    if (per_proc_plist) {
+        CFRelease(per_proc_plist);
     }
-    free(namelist);
 }

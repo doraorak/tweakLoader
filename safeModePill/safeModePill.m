@@ -2,10 +2,14 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <unistd.h>
+#import <stdio.h>
+#import <string.h>
 
-#define SAFE_MODE_RUN  "/var/run/tweakinject.safemode"
-#define SAFE_MODE_FILE "/Library/TweakInject/SafeMode/safemode.txt"
-#define SAFE_MODE_TMP  "/tmp/.safemode"
+#define SAFE_MODE_MARKER "/Library/TweakInject/SafeMode/.safemode"
+// Watched by the helper's LaunchDaemon. Dropping this file is how an
+// unprivileged injected dylib asks for a privileged action: launchd starts the
+// helper, which clears the marker and restarts userspace.
+#define SAFE_MODE_EXIT_REQUEST "/tmp/.tweakinject-safemode-exit-request"
 
 @interface SafeModeMenuHandler : NSObject
 + (instancetype)sharedHandler;
@@ -28,15 +32,25 @@ static SafeModeMenuHandler *gMenuHandler = nil;
 }
 
 - (void)exitSafeMode:(id)sender {
-    // This used to unlink the markers here and drop the status item. Both halves
-    // were wrong: /var/run and /Library/TweakInject/SafeMode are root:wheel and
-    // this runs as the user inside Dock, so every unlink() failed with EPERM --
-    // and removing the item anyway made a failed exit look like a successful
-    // one. Safe Mode stayed on with nothing on screen saying so.
+    // Unlinking the marker here cannot work: it is root:wheel and this runs as
+    // the user inside a menu bar agent, so unlink() fails with EPERM. An earlier
+    // version dropped the status item anyway, which made a failed exit look like
+    // a successful one -- Safe Mode stayed on with nothing on screen saying so.
     //
-    // Clearing the flag needs the privileged helper, so it happens in the app.
-    // The item disappears on its own once the flag is actually gone.
-    system("open -a TweakInject 2>/dev/null || true");
+    // Nor can this ask the helper directly: its XPC listener requires the caller
+    // to be the app AND to carry no foreign image, and this host fails both.
+    //
+    // So it writes the request file the helper's LaunchDaemon watches. launchd
+    // starts the helper, which clears the marker and restarts userspace -- the
+    // reboot matters, because every process running now spawned under Safe Mode
+    // with no tweaks in it. The pill removes itself on the next poll once the
+    // marker is actually gone, so a failure still shows as "still in Safe Mode".
+    const char *record = "exit requested from the menu bar pill\n";
+    FILE *f = fopen(SAFE_MODE_EXIT_REQUEST, "w");
+    if (f) {
+        fwrite(record, 1, strlen(record), f);
+        fclose(f);
+    }
 }
 
 - (void)openTweakInject:(id)sender {
@@ -58,6 +72,23 @@ static void install_safe_mode_pill(void) {
 
     // Retain persistently so it never deallocates in the host process
     CFRetain((__bridge CFTypeRef)gSafeModeStatusItem);
+
+    // A stable autosave name, and visibility asserted rather than assumed.
+    //
+    // The host is ControlCenter, where menu bar visibility is USER-OWNED POLICY
+    // persisted per autosave name -- the same mechanism System Settings uses to
+    // let someone hide Wi-Fi or the clock. An item created there is born HIDDEN:
+    // verified on the live process, a fresh statusItemWithLength: comes back with
+    // flags 0xa0940 and isVisible == 0, where the identical call in Finder comes
+    // back 0xa0950 and isVisible == 1. -[NSStatusItem isVisible] reads bit 0x10
+    // in both (bit 0x20 selects it and is clear either way), so the whole
+    // difference is one bit nobody sets. The class is the same NSSceneStatusItem
+    // in both processes, so this was never about ControlCenter being exotic.
+    //
+    // Without an autosave name AppKit invents one, so every relaunch claimed a
+    // fresh "Item-N" slot in com.apple.controlcenter and recorded it hidden.
+    gSafeModeStatusItem.autosaveName = @"TweakInjectSafeMode";
+    gSafeModeStatusItem.visible = YES;
 
     NSStatusBarButton *button = [gSafeModeStatusItem button];
     if (button) {
@@ -105,7 +136,7 @@ static void install_safe_mode_pill(void) {
     [openAppItem setEnabled:YES];
     [menu addItem:openAppItem];
 
-    NSMenuItem *exitItem = [[NSMenuItem alloc] initWithTitle:@"Exit Safe Mode in TweakInject…" action:@selector(exitSafeMode:) keyEquivalent:@""];
+    NSMenuItem *exitItem = [[NSMenuItem alloc] initWithTitle:@"Exit Safe Mode" action:@selector(exitSafeMode:) keyEquivalent:@""];
     [exitItem setTarget:gMenuHandler];
     [exitItem setEnabled:YES];
     [menu addItem:exitItem];
@@ -113,18 +144,11 @@ static void install_safe_mode_pill(void) {
     [gSafeModeStatusItem setMenu:menu];
 }
 
+// One marker, matching the hooks, the loader and the app. The *.txt scan this
+// replaces existed because the Safe Mode directory doubled as runtime state;
+// it now holds the two Safe Mode dylibs and nothing else.
 static BOOL safe_mode_is_active(void) {
-    if (access(SAFE_MODE_RUN, F_OK) == 0) return YES;
-    if (access(SAFE_MODE_FILE, F_OK) == 0) return YES;
-    if (access(SAFE_MODE_TMP, F_OK) == 0) return YES;
-    // Any *.txt in the Safe Mode directory counts, matching the loader. The pill
-    // dylib now lives in that directory too, which is why the suffix matters.
-    NSArray<NSString *> *names = [[NSFileManager defaultManager]
-        contentsOfDirectoryAtPath:@"/Library/TweakInject/SafeMode" error:NULL];
-    for (NSString *n in names) {
-        if ([[n lowercaseString] hasSuffix:@".txt"]) return YES;
-    }
-    return NO;
+    return access(SAFE_MODE_MARKER, F_OK) == 0;
 }
 
 static void remove_safe_mode_pill(void) {
@@ -146,6 +170,14 @@ static void sync_safe_mode_pill(void) {
     if (!NSApp) return;
     if (safe_mode_is_active()) {
         install_safe_mode_pill();
+        // Re-assert, because this is a safety indicator and not a preference. A
+        // command-drag off the menu bar persists visible=NO under our autosave
+        // name, which would otherwise silently retire the one thing on screen
+        // saying tweaks are stood down. Guarded so it only writes when actually
+        // off, rather than churning the pref every 1.5 seconds.
+        if (gSafeModeStatusItem && !gSafeModeStatusItem.visible) {
+            gSafeModeStatusItem.visible = YES;
+        }
     } else {
         remove_safe_mode_pill();
     }
