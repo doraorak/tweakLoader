@@ -58,7 +58,7 @@ universally linked bundle such as `com.apple.foundation`.
 
 A tweak injected into a sandboxed app cannot use the stock preferences API to reach a
 shared store: `NSUserDefaults` hands it that app's container, so the tweak's settings
-fragment per host process and the preference pane cannot see what the tweak wrote.
+fragment per host process.
 
 `libprefSupport.dylib` reads and writes `/Library/TweakInject/Preferences/Defaults`
 directly, at a fixed absolute path, so every process sees the same store regardless of
